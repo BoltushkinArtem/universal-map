@@ -132,8 +132,23 @@ const MapLibreEngine: FC<MapLibreEngineProps> = ({
                 setMarkerData((prev) => [...prev, { id: ++markerIdRef.current, lngLat: lngLatTuple }]);
             }
 
-            // Добавление или обновление полилиний
+            // --- drawPolylineOn: маленький белый квадратик ---
             if (drawPolylineOn) {
+                const markerEl = document.createElement("div");
+                markerEl.style.width = "10px";
+                markerEl.style.height = "10px";
+                markerEl.style.backgroundColor = "white";
+                markerEl.style.border = "1px solid black";
+                markerEl.style.boxSizing = "border-box";
+
+                const marker = new maplibregl.Marker({ element: markerEl, draggable: false })
+                    .setLngLat(lngLatTuple)
+                    .addTo(map);
+
+                markersRef.current.push(marker);
+                setMarkerData((prev) => [...prev, { id: ++markerIdRef.current, lngLat: lngLatTuple }]);
+
+                // --- Добавляем точку в полилинию ---
                 currentPolylineRef.current.push(lngLatTuple);
                 const polylineId = polylineIdRef.current;
 

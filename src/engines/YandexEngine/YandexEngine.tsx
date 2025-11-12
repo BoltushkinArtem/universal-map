@@ -7,20 +7,27 @@ declare global {
   }
 }
 
+// Глобальный promise для загрузки Yandex Maps
 let yandexMapsPromise: Promise<void> | null = null;
 
+// Функция загрузки Yandex Maps
 const loadYandexMaps = (apiKey: string): Promise<void> => {
   if (yandexMapsPromise) return yandexMapsPromise;
 
   yandexMapsPromise = new Promise((resolve, reject) => {
-    if (window.ymaps && window.ymaps.ready) return window.ymaps.ready(() => resolve());
+    if (window.ymaps && window.ymaps.ready) {
+      window.ymaps.ready(() => resolve());
+      return;
+    }
 
     const script = document.createElement("script");
     script.src = `https://api-maps.yandex.ru/2.1/?apikey=${apiKey}&lang=ru_RU`;
     script.async = true;
+
     script.onload = () =>
-      window.ymaps?.ready ? window.ymaps.ready(() => resolve()) : reject(new Error("ymaps not loaded"));
+      window.ymaps?.ready ? window.ymaps.ready(() => resolve()) : reject(new Error("Yandex Maps failed to load"));
     script.onerror = () => reject(new Error("Failed to load Yandex Maps"));
+
     document.head.appendChild(script);
   });
 
@@ -45,10 +52,9 @@ const YandexEngine: FC<YandexEngineProps> = ({
   const markersRef = useRef<any[]>([]);
   const polylineRef = useRef<any>(null);
   const polylinePathRef = useRef<number[][]>([]);
-  const styleTagRef = useRef<HTMLStyleElement | null>(null);
   const containerIdRef = useRef<string | null>(null);
+  const styleTagRef = useRef<HTMLStyleElement | null>(null);
 
-  // храним актуальные значения draw-флагов в ref
   const drawMarkerRef = useRef(drawMarkerOn);
   const drawPolylineRef = useRef(drawPolylineOn);
 
@@ -60,7 +66,6 @@ const YandexEngine: FC<YandexEngineProps> = ({
     drawPolylineRef.current = drawPolylineOn;
   }, [drawPolylineOn]);
 
-  // === Инициализация карты один раз ===
   useEffect(() => {
     const apiKey = (import.meta.env as any).VITE_YANDEX_API_KEY;
     if (!apiKey || !containerRef.current) return;
@@ -70,12 +75,12 @@ const YandexEngine: FC<YandexEngineProps> = ({
       containerRef.current.id = containerIdRef.current;
     }
 
-    let unmounted = false;
+    let isUnmounted = false;
 
-    const initMap = async () => {
+    const initializeMap = async () => {
       try {
         await loadYandexMaps(apiKey);
-        if (unmounted || !containerRef.current) return;
+        if (isUnmounted || !containerRef.current) return;
 
         const mapType =
           providerId === "YandexSatellite"
@@ -92,10 +97,10 @@ const YandexEngine: FC<YandexEngineProps> = ({
             type: mapType,
             controls: [],
           });
+
         mapRef.current = map;
         map.setType(mapType);
 
-        // Слой для polyline создаем один раз
         if (!polylineRef.current) {
           polylineRef.current = new window.ymaps.Polyline([], {
             strokeColor: "#FF0000",
@@ -103,73 +108,95 @@ const YandexEngine: FC<YandexEngineProps> = ({
             strokeOpacity: 1,
           });
           map.geoObjects.add(polylineRef.current);
+          polylineRef.current.options.set({
+            strokeColor: "#FF0000",
+            strokeWidth: 3,
+            strokeOpacity: 1,
+          });
         }
 
-        // Клик — используем один обработчик и актуальные draw-флаги через ref
         if (!(map as any)._clickHandler) {
           const handleClick = (e: any) => {
             const coords = e.get("coords");
 
-            if (drawMarkerRef.current) {
-              const placemark = new window.ymaps.Placemark(
-                coords,
-                {},
-                {
-                  iconLayout: "default#image",
-                  iconImageHref: markerIconUrl || "https://maps.google.com/mapfiles/ms/icons/red-dot.png",
-                  iconImageSize: [32, 32],
-                  draggable: true,
-                }
-              );
+            if (drawMarkerRef.current && !drawPolylineRef.current) {
+              const placemark = new window.ymaps.Placemark(coords, {}, {
+                iconLayout: "default#image",
+                iconImageHref: markerIconUrl || "https://maps.google.com/mapfiles/ms/icons/red-dot.png",
+                iconImageSize: [32, 32],
+                draggable: true,
+              });
               map.geoObjects.add(placemark);
               markersRef.current.push(placemark);
             }
 
             if (drawPolylineRef.current && polylineRef.current) {
+              const squarePlacemark = new window.ymaps.Placemark(
+                coords,
+                {},
+                {
+                  iconLayout: "default#image",
+                  iconImageHref:
+                    'data:image/svg+xml;charset=UTF-8,' +
+                    encodeURIComponent(`
+                      <svg xmlns="http://www.w3.org/2000/svg" width="10" height="10">
+                        <rect width="10" height="10" fill="white" stroke="black" stroke-width="1"/>
+                      </svg>
+                    `),
+                  iconImageSize: [10, 10],
+                  iconImageOffset: [-5, -5],
+                  draggable: false,
+                }
+              );
+              map.geoObjects.add(squarePlacemark);
+              markersRef.current.push(squarePlacemark);
+
               polylinePathRef.current.push(coords);
-              polylineRef.current.geometry.setCoordinates(polylinePathRef.current);
+              polylineRef.current.geometry.setCoordinates([...polylinePathRef.current]);
+              polylineRef.current.options.set({
+                strokeColor: "#FF0000",
+                strokeWidth: 3,
+                strokeOpacity: 1,
+              });
             }
           };
 
           map.events.add("click", handleClick);
           (map as any)._clickHandler = handleClick;
         }
-      } catch (err) {
-        console.error("Yandex Maps init error:", err);
+      } catch (error) {
+        console.error("Yandex Maps initialization error:", error);
       }
     };
 
-    initMap();
+    initializeMap();
 
     return () => {
-      unmounted = true;
+      isUnmounted = true;
       if (!mapRef.current) return;
       if ((mapRef.current as any)._clickHandler) {
         mapRef.current.events.remove("click", (mapRef.current as any)._clickHandler);
         (mapRef.current as any)._clickHandler = null;
       }
     };
-  }, [providerId, markerIconUrl]); // draw-флаги убраны из зависимостей
+  }, [providerId, markerIconUrl]);
 
-  // === Визуальный курсор ===
   useEffect(() => {
     const container = containerRef.current;
     const containerId = containerIdRef.current;
     if (!container || !containerId) return;
 
-    let styleTag = styleTagRef.current;
-    if (!styleTag) {
-      styleTag = document.createElement("style");
-      styleTagRef.current = styleTag;
-      styleTag.type = "text/css";
+    if (!styleTagRef.current) {
+      const styleTag = document.createElement("style");
       document.head.appendChild(styleTag);
+      styleTagRef.current = styleTag;
     }
 
-    const cursor = drawPolylineOn ? "crosshair" : "grab";
-    styleTag.innerHTML = `
+    const cursorStyle = drawPolylineOn ? "crosshair" : "grab";
+    styleTagRef.current.innerHTML = `
       #${containerId} .ymaps-2-1-79-map,
       #${containerId} .ymaps-2-1-79-map * {
-        cursor: ${cursor} !important;
+        cursor: ${cursorStyle} !important;
       }
     `;
   }, [drawPolylineOn]);
