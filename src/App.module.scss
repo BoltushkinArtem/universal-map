@@ -1,0 +1,31 @@
+.appHeader {
+  padding: 12px;
+  border-bottom: 1px solid #eee;
+
+  .title {
+    font-size: 18px;
+    font-weight: 600;
+  }
+
+  .subtitle {
+    font-size: 12px;
+    opacity: 0.8;
+  }
+}
+
+.appContainer {
+  height: calc(100% - 56px);
+  position: relative;
+}
+
+.providerWrapper {
+  position: absolute;
+  right: 12px;
+  top: 12px;
+  z-index: 9999;
+}
+
+.mapArea {
+  position: absolute;
+  inset: 0;
+}

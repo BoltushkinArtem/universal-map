@@ -1,0 +1,40 @@
+
+---
+
+### **.gitignore**
+
+```gitignore
+# Node.js
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# Vite
+dist/
+.vite/
+.env.development
+.env.local
+.env.*.local
+
+# TypeScript
+*.tsbuildinfo
+
+# Mac / Windows
+.DS_Store
+Thumbs.db
+
+# Logs
+logs
+*.log
+
+# IDE
+.idea/
+.vscode/
+*.suo
+*.ntvs*
+*.njsproj
+*.sln
+
+# Build output
+/build

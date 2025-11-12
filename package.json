@@ -1,0 +1,30 @@
+{
+  "name": "universal-map",
+  "version": "1.0.0",
+  "private": true,
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "preview": "vite preview"
+  },
+  "dependencies": {
+    "@googlemaps/js-api-loader": "^2.0.2",
+    "@mapbox/mapbox-gl-draw": "^1.5.1",
+    "axios": "^1.4.0",
+    "maplibre-gl": "^5.12.0",
+    "react": "^19.0.0",
+    "react-dom": "^19.0.0"
+  },
+  "devDependencies": {
+    "@maplibre/maplibre-gl-style-spec": "^24.3.1",
+    "@maplibre/vt-pbf": "^4.0.3",
+    "@types/arcgis-js-api": "^4.27.2",
+    "@types/mapbox__mapbox-gl-draw": "^1.4.9",
+    "@types/react": "^19.2.2",
+    "@types/react-dom": "^19.2.2",
+    "@vitejs/plugin-react": "^4.0.0",
+    "sass": "^1.94.0",
+    "typescript": "^5.2.2",
+    "vite": "^7.0.0"
+  }
+}
