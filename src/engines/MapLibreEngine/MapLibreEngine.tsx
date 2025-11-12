@@ -5,160 +5,189 @@ import { tileTemplate } from "../../utils/providers";
 import styles from "./MapLibreEngine.module.scss";
 
 interface MapLibreEngineProps {
-  /** Идентификатор провайдера тайлов */
-  providerId: string;
-  /** Включает возможность добавления маркеров по клику */
-  drawMarkerOn: boolean;
-  /** URL кастомной иконки маркера */
-  markerIconUrl?: string;
+    providerId: string;
+    drawMarkerOn: boolean;
+    drawPolylineOn?: boolean;
+    markerIconUrl?: string;
 }
 
 interface MarkerData {
-  id: number;
-  lngLat: maplibregl.LngLatLike;
+    id: number;
+    lngLat: [number, number];
 }
 
-/** Проверка поддержки WebGL в браузере */
+interface PolylineData {
+    id: number;
+    coordinates: [number, number][];
+}
+
+// Проверяем, поддерживает ли браузер WebGL
 const isWebGLAvailable = (): boolean => {
-  try {
-    const canvas = document.createElement("canvas");
-    return !!(
-      window.WebGLRenderingContext &&
-      (canvas.getContext("webgl") || canvas.getContext("experimental-webgl"))
-    );
-  } catch {
-    return false;
-  }
+    try {
+        const canvas = document.createElement("canvas");
+        return !!(
+            window.WebGLRenderingContext &&
+            (canvas.getContext("webgl") || canvas.getContext("experimental-webgl"))
+        );
+    } catch {
+        return false;
+    }
 };
 
-/**
- * Компонент карты MapLibre с поддержкой добавления и удаления маркеров
- */
 const MapLibreEngine: FC<MapLibreEngineProps> = ({
-  providerId,
-  drawMarkerOn,
-  markerIconUrl,
+    providerId,
+    drawMarkerOn,
+    drawPolylineOn = false,
+    markerIconUrl,
 }) => {
-  const mapContainerRef = useRef<HTMLDivElement | null>(null);
-  const mapRef = useRef<maplibregl.Map | null>(null);
-  const markersRef = useRef<maplibregl.Marker[]>([]);
-  const [markerData, setMarkerData] = useState<MarkerData[]>([]);
-  const markerIdRef = useRef(0);
+    const mapContainerRef = useRef<HTMLDivElement | null>(null);
+    const mapRef = useRef<maplibregl.Map | null>(null);
+    const markersRef = useRef<maplibregl.Marker[]>([]);
+    const [markerData, setMarkerData] = useState<MarkerData[]>([]);
+    const [polylineData, setPolylineData] = useState<PolylineData[]>([]);
+    const markerIdRef = useRef(0);
+    const polylineIdRef = useRef(0);
+    const currentPolylineRef = useRef<[number, number][]>([]);
 
-  /** Инициализация карты и базового слоя */
-  useEffect(() => {
-    const container = mapContainerRef.current;
-    if (!container) return;
+    // Инициализация карты
+    useEffect(() => {
+        if (!mapContainerRef.current || !isWebGLAvailable()) return;
 
-    if (!isWebGLAvailable()) {
-      console.error(
-        "WebGL не поддерживается в этом браузере. MapLibre карта не будет отображена."
-      );
-      return;
-    }
-
-    const mapInstance = new maplibregl.Map({
-      container,
-      style: "https://demotiles.maplibre.org/style.json",
-      center: [37.6173, 55.7558],
-      zoom: 10,
-    });
-
-    mapRef.current = mapInstance;
-
-    mapInstance.on("load", () => {
-      const tiles = tileTemplate(providerId);
-
-      if (!tiles?.length) {
-        console.warn("tileTemplate вернул пустой массив для", providerId);
-        return;
-      }
-
-      if (!mapInstance.getSource("basemap")) {
-        mapInstance.addSource("basemap", {
-          type: "raster",
-          tiles,
-          tileSize: 256,
+        const mapInstance = new maplibregl.Map({
+            container: mapContainerRef.current,
+            style: "https://demotiles.maplibre.org/style.json",
+            center: [37.6173, 55.7558],
+            zoom: 10,
         });
 
-        mapInstance.addLayer({
-          id: "basemap",
-          type: "raster",
-          source: "basemap",
+        mapRef.current = mapInstance;
+
+        mapInstance.on("load", () => {
+            const tiles = tileTemplate(providerId);
+            if (!tiles?.length) return;
+
+            if (!mapInstance.getSource("basemap")) {
+                mapInstance.addSource("basemap", { type: "raster", tiles, tileSize: 256 });
+                mapInstance.addLayer({ id: "basemap", type: "raster", source: "basemap" });
+            }
         });
-      }
-    });
 
-    // Функция очистки для useEffect — удаляем маркеры и карту при размонтировании
-    return () => {
-      markersRef.current.forEach((marker) => marker.remove());
-      markersRef.current = [];
-      mapRef.current?.remove();
-      mapRef.current = null;
+        // Функция очистки эффекта
+        return () => {
+            markersRef.current.forEach((marker) => marker.remove());
+            markersRef.current = [];
+            mapRef.current?.remove();
+            mapRef.current = null;
+        };
+    }, [providerId]);
+
+    // Обновление тайлов при смене провайдера
+    useEffect(() => {
+        const map = mapRef.current;
+        if (!map || !map.isStyleLoaded()) return;
+
+        const source = map.getSource("basemap") as maplibregl.RasterTileSource | undefined;
+        if (!source) return;
+
+        (source as any).tiles = tileTemplate(providerId);
+        map.triggerRepaint();
+    }, [providerId]);
+
+    // Внутри useEffect для drawPolylineOn
+    useEffect(() => {
+        const map = mapRef.current;
+        if (!map) return;
+
+        const canvas = map.getCanvas();
+
+        if (drawPolylineOn) {
+            canvas.style.cursor = "crosshair"; // ставим крестик на canvas
+        } else {
+            canvas.style.cursor = "";       // сброс на стандартный
+        }
+    }, [drawPolylineOn]);
+
+    // Обработка кликов для добавления маркеров и полилиний
+    useEffect(() => {
+        const map = mapRef.current;
+        if (!map) return;
+
+        const handleClick = (e: maplibregl.MapMouseEvent) => {
+            const lngLatTuple: [number, number] = [e.lngLat.lng, e.lngLat.lat];
+
+            // Добавление маркера
+            if (drawMarkerOn) {
+                const markerEl = document.createElement("div");
+                markerEl.style.width = "32px";
+                markerEl.style.height = "32px";
+                markerEl.style.backgroundImage = `url(${markerIconUrl || "https://maps.google.com/mapfiles/ms/icons/red-dot.png"})`;
+                markerEl.style.backgroundSize = "contain";
+                markerEl.style.backgroundRepeat = "no-repeat";
+
+                const marker = new maplibregl.Marker({ element: markerEl, draggable: true })
+                    .setLngLat(lngLatTuple)
+                    .addTo(map);
+
+                markersRef.current.push(marker);
+                setMarkerData((prev) => [...prev, { id: ++markerIdRef.current, lngLat: lngLatTuple }]);
+            }
+
+            // Добавление или обновление полилиний
+            if (drawPolylineOn) {
+                currentPolylineRef.current.push(lngLatTuple);
+                const polylineId = polylineIdRef.current;
+
+                if (currentPolylineRef.current.length >= 2) {
+                    const sourceId = `polyline-${polylineId}`;
+                    const layerId = `polyline-${polylineId}`;
+                    const existingSource = map.getSource(sourceId) as maplibregl.GeoJSONSource;
+
+                    const geojson: GeoJSON.Feature<GeoJSON.LineString, {}> = {
+                        type: "Feature",
+                        geometry: { type: "LineString", coordinates: currentPolylineRef.current },
+                        properties: {},
+                    };
+
+                    if (existingSource) {
+                        existingSource.setData(geojson);
+                    } else {
+                        map.addSource(sourceId, { type: "geojson", data: geojson });
+                        map.addLayer({
+                            id: layerId,
+                            type: "line",
+                            source: sourceId,
+                            paint: { "line-color": "#ff0000", "line-width": 3 },
+                        });
+                        setPolylineData((prev) => [
+                            ...prev,
+                            { id: polylineIdRef.current, coordinates: [...currentPolylineRef.current] },
+                        ]);
+                    }
+                }
+            }
+        };
+
+        map.on("click", handleClick);
+        return () => {
+            map.off("click", handleClick);
+        };
+    }, [drawMarkerOn, drawPolylineOn, markerIconUrl]);
+
+    // Удаление последнего маркера
+    const removeLastMarker = (): void => {
+        const lastMarker = markersRef.current.pop();
+        lastMarker?.remove();
+        setMarkerData((prev) => prev.slice(0, -1));
     };
-  }, [providerId]);
 
-  /** Обновление тайлов при смене провайдера */
-  useEffect(() => {
-    const map = mapRef.current;
-    if (!map || !map.isStyleLoaded()) return;
-
-    const source = map.getSource("basemap") as maplibregl.RasterTileSource | undefined;
-    if (!source) return;
-
-    (source as any).tiles = tileTemplate(providerId);
-    map.triggerRepaint();
-  }, [providerId]);
-
-  /** Обработка кликов для добавления маркеров */
-  useEffect(() => {
-    const map = mapRef.current;
-    if (!map) return;
-
-    const handleClick = (e: maplibregl.MapMouseEvent) => {
-      if (!drawMarkerOn) return;
-
-      const markerElement = document.createElement("div");
-      markerElement.style.width = "32px";
-      markerElement.style.height = "32px";
-      markerElement.style.backgroundImage = `url(${
-        markerIconUrl || "https://maps.google.com/mapfiles/ms/icons/red-dot.png"
-      })`;
-      markerElement.style.backgroundSize = "contain";
-      markerElement.style.backgroundRepeat = "no-repeat";
-
-      const marker = new maplibregl.Marker({ element: markerElement, draggable: true })
-        .setLngLat(e.lngLat)
-        .addTo(map);
-
-      markersRef.current.push(marker);
-
-      const nextId = ++markerIdRef.current;
-      setMarkerData((prev) => [...prev, { id: nextId, lngLat: e.lngLat }]);
-    };
-
-    map.on("click", handleClick);
-
-    return () => {
-      map.off("click", handleClick);
-    };
-  }, [drawMarkerOn, markerIconUrl]);
-
-  /** Удаление последнего маркера */
-  const removeLastMarker = (): void => {
-    const lastMarker = markersRef.current.pop();
-    lastMarker?.remove();
-    setMarkerData((prev) => prev.slice(0, -1));
-  };
-
-  return (
-    <div className={styles.mapContainer}>
-      <div ref={mapContainerRef} className={styles.mapInner} />
-      <button onClick={removeLastMarker} className={styles.removeMarkerButton}>
-        Remove Last Marker
-      </button>
-    </div>
-  );
+    return (
+        <div className={styles.mapContainer}>
+            <div ref={mapContainerRef} className={styles.mapInner} />
+            <button onClick={removeLastMarker} className={styles.removeMarkerButton}>
+                Remove Last Marker
+            </button>
+        </div>
+    );
 };
 
 export default MapLibreEngine;
