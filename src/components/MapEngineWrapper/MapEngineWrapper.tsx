@@ -1,8 +1,8 @@
 import React, { FC, ReactElement, useEffect, useState } from "react";
-import MapLibreEngine from "../engines/MapLibreEngine";
-import GoogleEngine from "../engines/GoogleEngine";
-import YandexEngine from "../engines/YandexEngine";
-import ArcGISEngine from "../engines/ArcGISEngine";
+import MapLibreEngine from "../../engines/MapLibreEngine";
+import GoogleEngine from "../../engines/GoogleEngine";
+import YandexEngine from "../../engines/YandexEngine";
+import ArcGISEngine from "../../engines/ArcGISEngine";
 
 import styles from "./MapEngineWrapper.module.scss";
 
