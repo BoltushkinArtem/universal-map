@@ -1,5 +1,6 @@
 import React, { FC, useEffect, useRef } from "react";
 import styles from "./YandexEngine.module.scss";
+import { DrawActionType } from "../drawActionType";
 
 declare global {
   interface Window {
@@ -7,16 +8,18 @@ declare global {
   }
 }
 
-// Глобальный promise для загрузки Yandex Maps
+// Глобальный Promise для однократной загрузки Yandex Maps API
 let yandexMapsPromise: Promise<void> | null = null;
 
-// Функция загрузки Yandex Maps
+/**
+ * Загружает Yandex Maps API один раз и возвращает Promise
+ */
 const loadYandexMaps = (apiKey: string): Promise<void> => {
   if (yandexMapsPromise) return yandexMapsPromise;
 
   yandexMapsPromise = new Promise((resolve, reject) => {
     if (window.ymaps && window.ymaps.ready) {
-      window.ymaps.ready(() => resolve());
+      window.ymaps.ready(resolve);
       return;
     }
 
@@ -24,10 +27,15 @@ const loadYandexMaps = (apiKey: string): Promise<void> => {
     script.src = `https://api-maps.yandex.ru/2.1/?apikey=${apiKey}&lang=ru_RU`;
     script.async = true;
 
-    script.onload = () =>
-      window.ymaps?.ready ? window.ymaps.ready(() => resolve()) : reject(new Error("Yandex Maps failed to load"));
-    script.onerror = () => reject(new Error("Failed to load Yandex Maps"));
+    script.onload = () => {
+      if (window.ymaps?.ready) {
+        window.ymaps.ready(resolve);
+      } else {
+        reject(new Error("Yandex Maps failed to load"));
+      }
+    };
 
+    script.onerror = () => reject(new Error("Failed to load Yandex Maps"));
     document.head.appendChild(script);
   });
 
@@ -36,17 +44,14 @@ const loadYandexMaps = (apiKey: string): Promise<void> => {
 
 interface YandexEngineProps {
   providerId: string;
-  drawMarkerOn?: boolean;
-  drawPolylineOn?: boolean;
+  drawActionType?: DrawActionType;
   markerIconUrl?: string;
 }
 
-const YandexEngine: FC<YandexEngineProps> = ({
-  providerId,
-  drawMarkerOn = false,
-  drawPolylineOn = false,
-  markerIconUrl,
-}) => {
+/**
+ * Компонент YandexEngine отображает карту Яндекса и позволяет рисовать маркеры или полилинии
+ */
+const YandexEngine: FC<YandexEngineProps> = ({ providerId, drawActionType, markerIconUrl }) => {
   const containerRef = useRef<HTMLDivElement | null>(null);
   const mapRef = useRef<any>(null);
   const markersRef = useRef<any[]>([]);
@@ -54,18 +59,14 @@ const YandexEngine: FC<YandexEngineProps> = ({
   const polylinePathRef = useRef<number[][]>([]);
   const containerIdRef = useRef<string | null>(null);
   const styleTagRef = useRef<HTMLStyleElement | null>(null);
+  const drawActionRef = useRef(drawActionType);
 
-  const drawMarkerRef = useRef(drawMarkerOn);
-  const drawPolylineRef = useRef(drawPolylineOn);
-
+  // Синхронизация ref с пропом drawActionType
   useEffect(() => {
-    drawMarkerRef.current = drawMarkerOn;
-  }, [drawMarkerOn]);
+    drawActionRef.current = drawActionType;
+  }, [drawActionType]);
 
-  useEffect(() => {
-    drawPolylineRef.current = drawPolylineOn;
-  }, [drawPolylineOn]);
-
+  // Инициализация карты и полилинии
   useEffect(() => {
     const apiKey = (import.meta.env as any).VITE_YANDEX_API_KEY;
     if (!apiKey || !containerRef.current) return;
@@ -108,18 +109,13 @@ const YandexEngine: FC<YandexEngineProps> = ({
             strokeOpacity: 1,
           });
           map.geoObjects.add(polylineRef.current);
-          polylineRef.current.options.set({
-            strokeColor: "#FF0000",
-            strokeWidth: 3,
-            strokeOpacity: 1,
-          });
         }
 
         if (!(map as any)._clickHandler) {
           const handleClick = (e: any) => {
             const coords = e.get("coords");
 
-            if (drawMarkerRef.current && !drawPolylineRef.current) {
+            if (drawActionRef.current === DrawActionType.MARKER) {
               const placemark = new window.ymaps.Placemark(coords, {}, {
                 iconLayout: "default#image",
                 iconImageHref: markerIconUrl || "https://maps.google.com/mapfiles/ms/icons/red-dot.png",
@@ -130,7 +126,7 @@ const YandexEngine: FC<YandexEngineProps> = ({
               markersRef.current.push(placemark);
             }
 
-            if (drawPolylineRef.current && polylineRef.current) {
+            if (drawActionRef.current === DrawActionType.POLYLINE && polylineRef.current) {
               const squarePlacemark = new window.ymaps.Placemark(
                 coords,
                 {},
@@ -148,6 +144,7 @@ const YandexEngine: FC<YandexEngineProps> = ({
                   draggable: false,
                 }
               );
+
               map.geoObjects.add(squarePlacemark);
               markersRef.current.push(squarePlacemark);
 
@@ -181,6 +178,7 @@ const YandexEngine: FC<YandexEngineProps> = ({
     };
   }, [providerId, markerIconUrl]);
 
+  // Динамическое управление курсором
   useEffect(() => {
     const container = containerRef.current;
     const containerId = containerIdRef.current;
@@ -192,14 +190,14 @@ const YandexEngine: FC<YandexEngineProps> = ({
       styleTagRef.current = styleTag;
     }
 
-    const cursorStyle = drawPolylineOn ? "crosshair" : "grab";
+    const cursorStyle = drawActionRef.current === DrawActionType.POLYLINE ? "crosshair" : "grab";
     styleTagRef.current.innerHTML = `
       #${containerId} .ymaps-2-1-79-map,
       #${containerId} .ymaps-2-1-79-map * {
         cursor: ${cursorStyle} !important;
       }
     `;
-  }, [drawPolylineOn]);
+  }, [drawActionType]);
 
   return <div ref={containerRef} className={styles.mapContainer} />;
 };

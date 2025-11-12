@@ -4,6 +4,7 @@ import MapEngineWrapper from "./components/MapEngineWrapper";
 import GeoEditorPanel from "./components/GeoEditorPanel";
 import markerIcon from "./assets/icons/marker.png";
 import styles from "./App.module.scss";
+import { DrawActionType } from "./engines/drawActionType";
 
 /**
  * Главный компонент приложения.
@@ -11,13 +12,12 @@ import styles from "./App.module.scss";
  */
 const App: FC = () => {
   const [provider, setProvider] = useState<string>("MapLibre_OSM");
-  const [drawMarker, setDrawMarker] = useState<boolean>(false);
-  const [drawPolyline, setDrawPolyline] = useState<boolean>(false);
+
+  const [drawActionType, setDrawActionType] = useState<DrawActionType>();
 
   /** Обработчик выбора действия рисования */
-  const handleDrawAction = (type: string): void => {
-    setDrawMarker(type === "marker");
-    setDrawPolyline(type === "polyline");
+  const handleDrawAction = (type: DrawActionType): void => {
+    setDrawActionType(type)
   };
 
   return (
@@ -39,8 +39,7 @@ const App: FC = () => {
         <div className={styles.mapArea}>
           <MapEngineWrapper
             providerId={provider}
-            drawMarkerOn={drawMarker}
-            drawPolylineOn={drawPolyline}
+            drawActionType={drawActionType}
             markerIconUrl={markerIcon}
           />
         </div>
