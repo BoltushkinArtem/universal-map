@@ -1,58 +1,64 @@
-import React, { FC } from "react";
+import { FC } from "react";
 import styles from "./GeoEditorPanel.module.scss";
 import { DrawActionType } from "../../engines/drawActionType";
 
 interface GeoEditorPanelProps {
   drawActionType?: DrawActionType;
-  tempPolylinePoints: [number, number][];
+  tempGeoData: GeoJSON.FeatureCollection;
   onDrawAction: (type?: DrawActionType) => void;
-  onUpdatePoints: (points: [number, number][]) => void;
-  onFinishPolyline: () => void;
-  onCancelPolyline: () => void;
+  onUpdateGeoData: (data: GeoJSON.FeatureCollection) => void;
+  onFinishEditing: () => void;
+  onCancelEditing: () => void;
   onDeleteLastPoint: () => void;
 }
 
 interface DrawAction {
   label: string;
-  type: string;
+  type: DrawActionType | undefined;
   enabled: boolean;
 }
 
 const GeoEditorPanel: FC<GeoEditorPanelProps> = ({
   drawActionType,
-  tempPolylinePoints,
+  tempGeoData,
   onDrawAction,
-  onUpdatePoints,
-  onFinishPolyline,
-  onCancelPolyline,
+  onUpdateGeoData,
+  onFinishEditing,
+  onCancelEditing,
   onDeleteLastPoint,
 }) => {
   const drawActions: DrawAction[] = [
-    { label: "Draw a polyline", type: "polyline", enabled: true },
-    { label: "Draw a marker", type: "marker", enabled: true },
-    { label: "Draw a polygon", type: "polygon", enabled: false },
-    { label: "Draw a rectangle", type: "rectangle", enabled: false },
-    { label: "Draw a multi polyline", type: "multiPolyline", enabled: false },
-    { label: "Draw a multi polygon", type: "multiPolygon", enabled: false },
+    { label: "Draw a polyline", type: DrawActionType.POLYLINE, enabled: true },
+    { label: "Draw a marker", type: DrawActionType.MARKER, enabled: true },
+    { label: "Draw a polygon", type: undefined, enabled: false },
+    { label: "Draw a rectangle", type: undefined, enabled: false },
+    { label: "Draw a multi polyline", type: undefined, enabled: false },
+    { label: "Draw a multi polygon", type: undefined, enabled: false },
   ];
 
-  const handleActionClick = (type: string) => {
-    const selectedType: DrawActionType | undefined =
-      type === "marker" ? DrawActionType.MARKER :
-      type === "polyline" ? DrawActionType.POLYLINE :
-      undefined;
+  const handleActionClick = (type?: DrawActionType) => {
+    onDrawAction(type);
 
-    onDrawAction(selectedType);
-    onUpdatePoints([]); // начинаем новую полилинию
+    // Очистка временных данных при старте нового режима рисования
+    onUpdateGeoData({
+      type: "FeatureCollection",
+      features: [],
+    });
   };
 
-  const renderPolylineButtons = () => {
+  const renderActiveActionButtons = () => {
     if (drawActionType === DrawActionType.POLYLINE) {
       return (
         <div className={styles.menuButtons}>
-          <button className={styles.menuButton} onClick={onCancelPolyline}>Cancel</button>
-          <button className={styles.menuButton} onClick={onDeleteLastPoint}>Delete last point</button>
-          <button className={styles.menuButton} onClick={onFinishPolyline}>Finish</button>
+          <button className={styles.menuButton} onClick={onCancelEditing}>
+            Cancel
+          </button>
+          <button className={styles.menuButton} onClick={onDeleteLastPoint}>
+            Delete last point
+          </button>
+          <button className={styles.menuButton} onClick={onFinishEditing}>
+            Finish
+          </button>
         </div>
       );
     }
@@ -60,7 +66,9 @@ const GeoEditorPanel: FC<GeoEditorPanelProps> = ({
     if (drawActionType === DrawActionType.MARKER) {
       return (
         <div className={styles.menuButtons}>
-          <button className={styles.menuButton} onClick={() => onDrawAction(undefined)}>Cancel</button>
+          <button className={styles.menuButton} onClick={onCancelEditing}>
+            Cancel
+          </button>
         </div>
       );
     }
@@ -71,19 +79,28 @@ const GeoEditorPanel: FC<GeoEditorPanelProps> = ({
   return (
     <div className={styles.container}>
       <h4 className={styles.title}>Geo Editor</h4>
+
       <div className={styles.actionButtons}>
-        {drawActions.map(action => (
+        {drawActions.map(({ label, type, enabled }) => (
           <button
-            key={action.type}
-            className={`${styles.button} ${!action.enabled ? styles.disabled : ""}`}
-            disabled={!action.enabled}
-            onClick={() => action.enabled && handleActionClick(action.type)}
+            key={label}
+            className={`${styles.button} ${!enabled ? styles.disabled : ""}`}
+            disabled={!enabled}
+            onClick={() => enabled && handleActionClick(type)}
           >
-            {action.label}
+            {label}
           </button>
         ))}
       </div>
-      {renderPolylineButtons()}
+
+      {renderActiveActionButtons()}
+
+      {drawActionType && (
+        <div className={styles.status}>
+          Active mode: <b>{drawActionType}</b> | Features:{" "}
+          {tempGeoData.features.length}
+        </div>
+      )}
     </div>
   );
 };

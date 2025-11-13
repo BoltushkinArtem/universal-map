@@ -1,4 +1,4 @@
-import React, { useState, FC } from "react";
+import { FC, useState } from "react";
 import ProviderSelector from "./components/ProviderSelector";
 import MapEngineWrapper from "./components/MapEngineWrapper";
 import GeoEditorPanel from "./components/GeoEditorPanel";
@@ -7,32 +7,52 @@ import styles from "./App.module.scss";
 import { DrawActionType } from "./engines/drawActionType";
 
 const App: FC = () => {
-  const [provider, setProvider] = useState<string>("MapLibre_OSM");
+  const [provider, setProvider] = useState("MapLibre_OSM");
   const [drawActionType, setDrawActionType] = useState<DrawActionType>();
-  const [tempPolylinePoints, setTempPolylinePoints] = useState<[number, number][]>([]);
-  const [savedPolylines, setSavedPolylines] = useState<[number, number][][]>([]);
 
-  // Обновление временной полилинии
-  const handleUpdatePoints = (points: [number, number][]) => setTempPolylinePoints(points);
+  const [tempGeoData, setTempGeoData] = useState<GeoJSON.FeatureCollection>({
+    type: "FeatureCollection",
+    features: [],
+  });
 
-  // Завершение полилинии: сохраняем её отдельно
-  const handleFinishPolyline = () => {
-    if (tempPolylinePoints.length > 0) {
-      setSavedPolylines([...savedPolylines, tempPolylinePoints]);
-      setTempPolylinePoints([]);
+  const [savedGeoData, setSavedGeoData] = useState<GeoJSON.FeatureCollection>({
+    type: "FeatureCollection",
+    features: [],
+  });
+
+  const handleUpdateGeoData = (data: GeoJSON.FeatureCollection) => {
+    setTempGeoData(data);
+  };
+
+  const handleFinishEditing = () => {
+    if (tempGeoData.features.length > 0) {
+      setSavedGeoData({
+        type: "FeatureCollection",
+        features: [...savedGeoData.features, ...tempGeoData.features.map(f => ({ ...f, properties: { ...f.properties, isTemp: false } }))],
+      });
+      setTempGeoData({ type: "FeatureCollection", features: [] });
       setDrawActionType(undefined);
     }
   };
 
-  // Отмена текущей полилинии
-  const handleCancelPolyline = () => {
-    setTempPolylinePoints([]);
+  const handleCancelEditing = () => {
+    setTempGeoData({ type: "FeatureCollection", features: [] });
     setDrawActionType(undefined);
   };
 
-  // Удаление последней точки временной полилинии
   const handleDeleteLastPoint = () => {
-    setTempPolylinePoints(tempPolylinePoints.slice(0, tempPolylinePoints.length - 1));
+    const updated = structuredClone(tempGeoData);
+    const lastLine = [...updated.features]
+      .reverse()
+      .find(f => f.geometry.type === "LineString" && f.properties?.isTemp);
+
+    if (lastLine && lastLine.geometry.type === "LineString") {
+      lastLine.geometry.coordinates.pop();
+      if (lastLine.geometry.coordinates.length === 0) {
+        updated.features = updated.features.filter(f => f !== lastLine);
+      }
+      setTempGeoData(updated);
+    }
   };
 
   return (
@@ -49,11 +69,11 @@ const App: FC = () => {
 
         <GeoEditorPanel
           drawActionType={drawActionType}
-          tempPolylinePoints={tempPolylinePoints}
+          tempGeoData={tempGeoData}
           onDrawAction={setDrawActionType}
-          onUpdatePoints={handleUpdatePoints}
-          onFinishPolyline={handleFinishPolyline}
-          onCancelPolyline={handleCancelPolyline}
+          onUpdateGeoData={handleUpdateGeoData}
+          onFinishEditing={handleFinishEditing}
+          onCancelEditing={handleCancelEditing}
           onDeleteLastPoint={handleDeleteLastPoint}
         />
 
@@ -62,9 +82,9 @@ const App: FC = () => {
             providerId={provider}
             drawActionType={drawActionType}
             markerIconUrl={markerIcon}
-            tempPolylinePoints={tempPolylinePoints}
-            savedPolylines={savedPolylines}
-            onUpdatePoints={handleUpdatePoints}
+            tempGeoData={tempGeoData}
+            savedGeoData={savedGeoData}
+            onUpdateGeoData={handleUpdateGeoData}
           />
         </div>
       </div>
