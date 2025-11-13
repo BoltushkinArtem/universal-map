@@ -112,22 +112,30 @@ const MapLibreEngine: FC<MapLibreEngineProps> = ({
 
             const coords: [number, number] = [event.lngLat.lng, event.lngLat.lat];
 
+            if (action === DrawActionType.MARKER) {
+                const id = `marker-${nextIdRef.current++}`;
+                const newFeature: GeoJSON.Feature<GeoJSON.Point> = {
+                    type: "Feature",
+                    geometry: { type: "Point", coordinates: coords },
+                    properties: { id, type: "marker" },
+                };
+
+                // Сохраняем в markersRef сразу (создастся в renderMarkers)
+                markersRef.current.set(id, null as any);
+
+                onUpdateGeoData({
+                    type: "FeatureCollection",
+                    features: [...(tempGeoData.features ?? []), newFeature],
+                });
+                return;
+            }
+
             const cloned: GeoJSON.FeatureCollection =
                 typeof structuredClone === "function"
                     ? structuredClone(tempGeoData)
                     : JSON.parse(JSON.stringify(tempGeoData || { type: "FeatureCollection", features: [] }));
 
             cloned.features = Array.isArray(cloned.features) ? cloned.features : [];
-
-            if (action === DrawActionType.MARKER) {
-                cloned.features.push({
-                    type: "Feature",
-                    geometry: { type: "Point", coordinates: coords },
-                    properties: { id: nextIdRef.current++, type: "marker" },
-                });
-                onUpdateGeoData(cloned);
-                return;
-            }
 
             if (action === DrawActionType.POLYLINE) {
                 const tempLine = cloned.features
@@ -139,7 +147,7 @@ const MapLibreEngine: FC<MapLibreEngineProps> = ({
                     );
 
                 if (tempLine) {
-                    (tempLine.geometry as GeoJSON.LineString).coordinates.push(coords);
+                    tempLine.geometry.coordinates.push(coords);
                 } else {
                     cloned.features.push({
                         type: "Feature",
@@ -178,14 +186,14 @@ const MapLibreEngine: FC<MapLibreEngineProps> = ({
             if (!id) return;
 
             newIds.add(id);
-            const existingMarker = markersRef.current.get(id);
+            let marker = markersRef.current.get(id);
 
             const coordinates = feature.geometry.coordinates as [number, number];
 
-            if (existingMarker) {
-                const curr = existingMarker.getLngLat();
+            if (marker) {
+                const curr = marker.getLngLat();
                 if (curr.lng !== coordinates[0] || curr.lat !== coordinates[1]) {
-                    existingMarker.setLngLat(coordinates as LngLatLike);
+                    marker.setLngLat(coordinates as LngLatLike);
                 }
             } else {
                 const el = document.createElement("div");
@@ -196,7 +204,7 @@ const MapLibreEngine: FC<MapLibreEngineProps> = ({
                 el.style.backgroundSize = "contain";
                 el.style.backgroundRepeat = "no-repeat";
 
-                const marker = new maplibregl.Marker({ element: el })
+                marker = new maplibregl.Marker({ element: el })
                     .setLngLat(coordinates as LngLatLike)
                     .addTo(map);
 
@@ -204,6 +212,7 @@ const MapLibreEngine: FC<MapLibreEngineProps> = ({
             }
         });
 
+        // Удаляем маркеры, которых больше нет в данных
         markersRef.current.forEach((marker, id) => {
             if (!newIds.has(id)) {
                 marker.remove();
