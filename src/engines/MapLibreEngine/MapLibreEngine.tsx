@@ -1,210 +1,256 @@
-import React, { FC, useEffect, useRef, useState } from "react";
-import maplibregl from "maplibre-gl";
+import { FC, useEffect, useRef, useState, useCallback } from "react";
+import maplibregl, { Map, GeoJSONSource, MapMouseEvent } from "maplibre-gl";
 import "maplibre-gl/dist/maplibre-gl.css";
 import { tileTemplate } from "../../utils/providers";
 import styles from "./MapLibreEngine.module.scss";
 import { DrawActionType } from "../drawActionType";
 
 interface MapLibreEngineProps {
-  providerId: string;
-  drawActionType?: DrawActionType;
-  markerIconUrl?: string;
+    providerId: string;
+    drawActionType?: DrawActionType;
+    markerIconUrl?: string;
 }
 
-interface MarkerData {
-  id: number;
-  lngLat: [number, number];
+interface Marker {
+    id: number;
+    lngLat: [number, number];
 }
 
-interface PolylineData {
-  id: number;
-  coordinates: [number, number][];
+interface Polyline {
+    id: number;
+    coordinates: [number, number][];
 }
 
-// Проверка поддержки WebGL
+/**
+ * Проверяет поддержку WebGL в браузере.
+ */
 const isWebGLAvailable = (): boolean => {
-  try {
-    const canvas = document.createElement("canvas");
-    return !!(
-      window.WebGLRenderingContext &&
-      (canvas.getContext("webgl") || canvas.getContext("experimental-webgl"))
-    );
-  } catch {
-    return false;
-  }
+    try {
+        const canvas = document.createElement("canvas");
+        return !!(
+            window.WebGLRenderingContext &&
+            (canvas.getContext("webgl") || canvas.getContext("experimental-webgl"))
+        );
+    } catch {
+        return false;
+    }
 };
 
+/**
+ * Основной компонент карты MapLibre.
+ * Позволяет рисовать маркеры и линии на карте.
+ */
 const MapLibreEngine: FC<MapLibreEngineProps> = ({
-  providerId,
-  drawActionType,
-  markerIconUrl,
+    providerId,
+    drawActionType,
+    markerIconUrl,
 }) => {
-  const mapContainerRef = useRef<HTMLDivElement | null>(null);
-  const mapRef = useRef<maplibregl.Map | null>(null);
-  const markersRef = useRef<maplibregl.Marker[]>([]);
-  const [markerData, setMarkerData] = useState<MarkerData[]>([]);
-  const [polylineData, setPolylineData] = useState<PolylineData[]>([]);
-  const markerIdRef = useRef(0);
-  const polylineIdRef = useRef(0);
-  const currentPolylineRef = useRef<[number, number][]>([]);
+    // --- Refs -------------------------------------------------------
 
-  const drawActionRef = useRef(drawActionType);
+    const mapContainerRef = useRef<HTMLDivElement | null>(null);
+    const mapRef = useRef<Map | null>(null);
+    const drawActionRef = useRef(drawActionType);
+    const currentPolylineRef = useRef<[number, number][]>([]);
+    const markerIdRef = useRef(0);
+    const polylineIdRef = useRef(0);
 
-  // Синхронизация ref с пропсом
-  useEffect(() => {
-    drawActionRef.current = drawActionType;
-  }, [drawActionType]);
+    // --- State ------------------------------------------------------
 
-  // Инициализация карты
-  useEffect(() => {
-    if (!mapContainerRef.current || !isWebGLAvailable()) return;
+    const [markers, setMarkers] = useState<Marker[]>([]);
+    const [polylines, setPolylines] = useState<Polyline[]>([]);
 
-    const mapInstance = new maplibregl.Map({
-      container: mapContainerRef.current,
-      style: "https://demotiles.maplibre.org/style.json",
-      center: [37.6173, 55.7558],
-      zoom: 10,
-    });
+    // --- Effects ----------------------------------------------------
 
-    mapRef.current = mapInstance;
+    // Обновляем актуальное значение режима рисования
+    useEffect(() => {
+        drawActionRef.current = drawActionType;
+    }, [drawActionType]);
 
-    mapInstance.on("load", () => {
-      const tiles = tileTemplate(providerId);
-      if (!tiles?.length) return;
+    // Инициализация карты
+    useEffect(() => {
+        if (!mapContainerRef.current || !isWebGLAvailable()) return;
 
-      if (!mapInstance.getSource("basemap")) {
-        mapInstance.addSource("basemap", { type: "raster", tiles, tileSize: 256 });
-        mapInstance.addLayer({ id: "basemap", type: "raster", source: "basemap" });
-      }
-    });
+        const map = new maplibregl.Map({
+            container: mapContainerRef.current,
+            style: "https://demotiles.maplibre.org/style.json",
+            center: [37.6173, 55.7558],
+            zoom: 10,
+        });
 
-    return () => {
-      markersRef.current.forEach((marker) => marker.remove());
-      markersRef.current = [];
-      mapRef.current?.remove();
-      mapRef.current = null;
-    };
-  }, [providerId]);
+        mapRef.current = map;
 
-  // Обновление тайлов при смене провайдера
-  useEffect(() => {
-    const map = mapRef.current;
-    if (!map || !map.isStyleLoaded()) return;
+        map.on("load", () => {
+            const tiles = tileTemplate(providerId);
+            if (tiles?.length && !map.getSource("basemap")) {
+                map.addSource("basemap", { type: "raster", tiles, tileSize: 256 });
+                map.addLayer({ id: "basemap", type: "raster", source: "basemap" });
+            }
+        });
 
-    const source = map.getSource("basemap") as maplibregl.RasterTileSource | undefined;
-    if (!source) return;
+        return () => {
+            map.remove();
+            mapRef.current = null;
+        };
+    }, [providerId]);
 
-    (source as any).tiles = tileTemplate(providerId);
-    map.triggerRepaint();
-  }, [providerId]);
+    // Изменяем курсор при смене режима рисования
+    useEffect(() => {
+        const map = mapRef.current;
+        if (!map) return;
+        map.getCanvas().style.cursor = drawActionType ? "crosshair" : "";
+    }, [drawActionType]);
 
-  // Управление курсором
-  useEffect(() => {
-    const map = mapRef.current;
-    if (!map) return;
+    // Обработка кликов по карте — добавление маркеров и линий
+    useEffect(() => {
+        const map = mapRef.current;
+        if (!map) return;
 
-    const canvas = map.getCanvas();
-    canvas.style.cursor = drawActionRef.current ? "crosshair" : "";
-  }, [drawActionType]);
+        const handleClick = (event: MapMouseEvent) => {
+            if (!event.lngLat) return;
+            const lngLat: [number, number] = [event.lngLat.lng, event.lngLat.lat];
 
-  // Обработка кликов
-  useEffect(() => {
-    const map = mapRef.current;
-    if (!map) return;
+            switch (drawActionRef.current) {
+                case DrawActionType.MARKER: {
+                    const newMarker: Marker = { id: ++markerIdRef.current, lngLat };
+                    setMarkers((prev) => [...prev, newMarker]);
+                    break;
+                }
 
-    const handleClick = (e: maplibregl.MapMouseEvent) => {
-      if (!e.lngLat) return;
-      const lngLatTuple: [number, number] = [e.lngLat.lng, e.lngLat.lat];
+                case DrawActionType.POLYLINE: {
+                    currentPolylineRef.current.push(lngLat);
 
-      // MARKER
-      if (drawActionRef.current === DrawActionType.MARKER) {
-        const markerEl = document.createElement("div");
-        markerEl.style.width = "32px";
-        markerEl.style.height = "32px";
-        markerEl.style.backgroundImage = `url(${
-          markerIconUrl || "https://maps.google.com/mapfiles/ms/icons/red-dot.png"
-        })`;
-        markerEl.style.backgroundSize = "contain";
-        markerEl.style.backgroundRepeat = "no-repeat";
+                    const currentId = polylineIdRef.current || 1;
+                    setPolylines((prev) => {
+                        const existing = prev.find((p) => p.id === currentId);
+                        const updated = { id: currentId, coordinates: [...currentPolylineRef.current] };
 
-        const marker = new maplibregl.Marker({ element: markerEl, draggable: true })
-          .setLngLat(lngLatTuple)
-          .addTo(map);
+                        if (existing) {
+                            return prev.map((p) => (p.id === currentId ? updated : p));
+                        }
 
-        markersRef.current.push(marker);
-        setMarkerData((prev) => [...prev, { id: ++markerIdRef.current, lngLat: lngLatTuple }]);
-        return;
-      }
+                        polylineIdRef.current = currentId;
+                        return [...prev, updated];
+                    });
 
-      // POLYLINE — маленький белый квадратик и линия
-      if (drawActionRef.current === DrawActionType.POLYLINE) {
-        const markerEl = document.createElement("div");
-        markerEl.style.width = "10px";
-        markerEl.style.height = "10px";
-        markerEl.style.backgroundColor = "white";
-        markerEl.style.border = "1px solid black";
-        markerEl.style.boxSizing = "border-box";
+                    break;
+                }
 
-        const marker = new maplibregl.Marker({ element: markerEl, draggable: false })
-          .setLngLat(lngLatTuple)
-          .addTo(map);
+                default:
+                    break;
+            }
+        };
 
-        markersRef.current.push(marker);
-        setMarkerData((prev) => [...prev, { id: ++markerIdRef.current, lngLat: lngLatTuple }]);
+        map.on("click", handleClick);
+        return () => {
+            map.off("click", handleClick);
+        };
+    }, []);
 
-        currentPolylineRef.current.push(lngLatTuple);
-        const polylineId = polylineIdRef.current;
-        if (currentPolylineRef.current.length >= 2) {
-          const sourceId = `polyline-${polylineId}`;
-          const layerId = `polyline-${polylineId}`;
-          const existingSource = map.getSource(sourceId) as maplibregl.GeoJSONSource;
+    // Отрисовка маркеров и линий на карте
+    useEffect(() => {
+        const map = mapRef.current;
+        if (!map || !map.isStyleLoaded()) return;
 
-          const geojson: GeoJSON.Feature<GeoJSON.LineString, {}> = {
-            type: "Feature",
-            geometry: { type: "LineString", coordinates: currentPolylineRef.current },
-            properties: {},
-          };
-
-          if (existingSource) {
-            existingSource.setData(geojson);
-          } else {
-            map.addSource(sourceId, { type: "geojson", data: geojson });
-            map.addLayer({
-              id: layerId,
-              type: "line",
-              source: sourceId,
-              paint: { "line-color": "#ff0000", "line-width": 3 },
-            });
-            setPolylineData((prev) => [
-              ...prev,
-              { id: polylineIdRef.current, coordinates: [...currentPolylineRef.current] },
-            ]);
-          }
+        // --- Очистка при пустых массивах -----------------------------------
+        if (markers.length === 0) {
+            document.querySelectorAll(".custom-marker").forEach((el) => el.remove());
         }
-      }
-    };
+        if (polylines.length === 0) {
+            document.querySelectorAll(".polyline-point").forEach((el) => el.remove());
+            map.getStyle().layers
+                ?.filter((layer) => layer.id.startsWith("polyline-"))
+                .forEach((layer) => {
+                    if (map.getLayer(layer.id)) map.removeLayer(layer.id);
+                    if (map.getSource(layer.id)) map.removeSource(layer.id);
+                });
+        }
 
-    map.on("click", handleClick);
-    return () => {
-      map.off("click", handleClick);
-    };
-  }, [markerIconUrl]);
+        // --- Маркеры ---------------------------------------------------
 
-  // Удаление последнего маркера
-  const removeLastMarker = (): void => {
-    const lastMarker = markersRef.current.pop();
-    lastMarker?.remove();
-    setMarkerData((prev) => prev.slice(0, -1));
-  };
+        markers.forEach((marker) => {
+            const markerEl = document.createElement("div");
+            markerEl.className = "custom-marker";
+            markerEl.style.width = "32px";
+            markerEl.style.height = "32px";
+            markerEl.style.backgroundImage = `url(${markerIconUrl || "https://maps.google.com/mapfiles/ms/icons/red-dot.png"
+                })`;
+            markerEl.style.backgroundSize = "contain";
+            markerEl.style.backgroundRepeat = "no-repeat";
 
-  return (
-    <div className={styles.mapContainer}>
-      <div ref={mapContainerRef} className={styles.mapInner} />
-      <button onClick={removeLastMarker} className={styles.removeMarkerButton}>
-        Remove Last Marker
-      </button>
-    </div>
-  );
+            new maplibregl.Marker({ element: markerEl, draggable: true })
+                .setLngLat(marker.lngLat)
+                .addTo(map);
+        });
+
+        // --- Полилинии ------------------------------------------------
+
+        polylines.forEach((line) => {
+            const sourceId = `polyline-${line.id}`;
+            const geojson: GeoJSON.Feature<GeoJSON.LineString> = {
+                type: "Feature",
+                geometry: { type: "LineString", coordinates: line.coordinates },
+                properties: {},
+            };
+
+            const source = map.getSource(sourceId) as GeoJSONSource | undefined;
+
+            if (source) {
+                source.setData(geojson);
+            } else {
+                map.addSource(sourceId, { type: "geojson", data: geojson });
+                map.addLayer({
+                    id: sourceId,
+                    type: "line",
+                    source: sourceId,
+                    paint: { "line-color": "#ff0000", "line-width": 3 },
+                });
+            }
+
+            // --- Контрольные точки (белые квадраты) ---------------------
+
+            line.coordinates.forEach((coord, idx) => {
+                const pointId = `${sourceId}-point-${idx}`;
+                if (document.querySelector(`[data-point-id="${pointId}"]`)) return;
+
+                const pointEl = document.createElement("div");
+                pointEl.className = "polyline-point";
+                pointEl.dataset.pointId = pointId;
+                Object.assign(pointEl.style, {
+                    width: "10px",
+                    height: "10px",
+                    backgroundColor: "white",
+                    border: "1px solid black",
+                    borderRadius: "2px",
+                    boxSizing: "border-box",
+                });
+
+                new maplibregl.Marker({ element: pointEl, draggable: false })
+                    .setLngLat(coord)
+                    .addTo(map);
+            });
+        });
+    }, [markers, polylines, markerIconUrl]);
+
+    // --- Actions ----------------------------------------------------
+
+    const handleRemoveLastMarker = useCallback(() => {
+        setMarkers((prev) => prev.slice(0, -1));
+    }, []);
+
+    // --- Render -----------------------------------------------------
+
+    return (
+        <div className={styles.mapContainer}>
+            <div ref={mapContainerRef} className={styles.mapInner} />
+            <button
+                type="button"
+                onClick={handleRemoveLastMarker}
+                className={styles.removeMarkerButton}
+            >
+                Remove Last Marker
+            </button>
+        </div>
+    );
 };
 
 export default MapLibreEngine;
