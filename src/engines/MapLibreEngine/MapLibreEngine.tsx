@@ -1,5 +1,5 @@
 import { FC, useEffect, useRef, useCallback, useState } from "react";
-import maplibregl, { GeoJSONSource, Map, MapMouseEvent } from "maplibre-gl";
+import maplibregl, { GeoJSONSource, Map as MapLibreMap, MapMouseEvent, LngLatLike } from "maplibre-gl";
 import "maplibre-gl/dist/maplibre-gl.css";
 import { tileTemplate } from "../../utils/providers";
 import styles from "./MapLibreEngine.module.scss";
@@ -38,9 +38,10 @@ const MapLibreEngine: FC<MapLibreEngineProps> = ({
     onUpdateGeoData,
 }) => {
     const mapContainerRef = useRef<HTMLDivElement | null>(null);
-    const mapRef = useRef<Map | null>(null);
+    const mapRef = useRef<MapLibreMap | null>(null);
     const drawActionRef = useRef(drawActionType);
     const nextIdRef = useRef(1);
+    const markersRef = useRef<Map<string, maplibregl.Marker>>(new Map());
 
     const [mapReady, setMapReady] = useState(false);
 
@@ -81,8 +82,6 @@ const MapLibreEngine: FC<MapLibreEngineProps> = ({
         };
 
         map.on("load", onLoad);
-
-        // idle — карта полностью загружена (стили, тайлы, слои)
         const onIdle = () => setMapReady(true);
         map.on("idle", onIdle);
 
@@ -94,7 +93,6 @@ const MapLibreEngine: FC<MapLibreEngineProps> = ({
         };
     }, [providerId]);
 
-    // Синхронизация режима рисования
     useEffect(() => {
         drawActionRef.current = drawActionType;
         if (mapRef.current) {
@@ -135,10 +133,13 @@ const MapLibreEngine: FC<MapLibreEngineProps> = ({
                 const tempLine = cloned.features
                     .slice()
                     .reverse()
-                    .find((f): f is GeoJSON.Feature<GeoJSON.LineString> => isLineFeature(f) && f.properties?.isTemp);
+                    .find(
+                        (f): f is GeoJSON.Feature<GeoJSON.LineString> =>
+                            isLineFeature(f) && f.properties?.isTemp
+                    );
 
                 if (tempLine) {
-                    tempLine.geometry.coordinates.push(coords);
+                    (tempLine.geometry as GeoJSON.LineString).coordinates.push(coords);
                 } else {
                     cloned.features.push({
                         type: "Feature",
@@ -165,16 +166,28 @@ const MapLibreEngine: FC<MapLibreEngineProps> = ({
         const map = mapRef.current;
         if (!map) return;
 
-        document.querySelectorAll(".custom-marker").forEach((el) => el.remove());
-
-        const allFeatures: GeoJSON.Feature[] = [
+        const allFeatures: GeoJSON.Feature<GeoJSON.Point>[] = [
             ...(savedGeoData?.features ?? []),
             ...(tempGeoData.features ?? []),
-        ];
+        ].filter(isPointFeature);
 
-        allFeatures
-            .filter(isPointFeature)
-            .forEach((feature) => {
+        const newIds = new Set<string>();
+
+        allFeatures.forEach((feature) => {
+            const id = feature.properties?.id?.toString();
+            if (!id) return;
+
+            newIds.add(id);
+            const existingMarker = markersRef.current.get(id);
+
+            const coordinates = feature.geometry.coordinates as [number, number];
+
+            if (existingMarker) {
+                const curr = existingMarker.getLngLat();
+                if (curr.lng !== coordinates[0] || curr.lat !== coordinates[1]) {
+                    existingMarker.setLngLat(coordinates as LngLatLike);
+                }
+            } else {
                 const el = document.createElement("div");
                 el.className = "custom-marker";
                 el.style.width = "32px";
@@ -183,10 +196,20 @@ const MapLibreEngine: FC<MapLibreEngineProps> = ({
                 el.style.backgroundSize = "contain";
                 el.style.backgroundRepeat = "no-repeat";
 
-                new (maplibregl as any).Marker({ element: el })
-                    .setLngLat(feature.geometry.coordinates as [number, number])
+                const marker = new maplibregl.Marker({ element: el })
+                    .setLngLat(coordinates as LngLatLike)
                     .addTo(map);
-            });
+
+                markersRef.current.set(id, marker);
+            }
+        });
+
+        markersRef.current.forEach((marker, id) => {
+            if (!newIds.has(id)) {
+                marker.remove();
+                markersRef.current.delete(id);
+            }
+        });
     }, [markerIconUrl, savedGeoData, tempGeoData]);
 
     const renderGeoData = useCallback(() => {
@@ -218,9 +241,9 @@ const MapLibreEngine: FC<MapLibreEngineProps> = ({
         }
 
         const vertexFeatures: GeoJSON.Feature<GeoJSON.Point>[] = lineFeatures.flatMap((lf) =>
-            lf.geometry.coordinates.map((coord, idx) => ({
+            (lf.geometry as GeoJSON.LineString).coordinates.map((coord, idx) => ({
                 type: "Feature",
-                geometry: { type: "Point", coordinates: coord as [number, number] },
+                geometry: { type: "Point", coordinates: coord },
                 properties: { id: `${lf.properties?.id ?? "ln"}-${idx}` },
             }))
         );
@@ -251,7 +274,6 @@ const MapLibreEngine: FC<MapLibreEngineProps> = ({
         renderMarkers();
     }, [savedGeoData, tempGeoData, renderMarkers]);
 
-    // renderGeoData после полной загрузки карты и стилей
     useEffect(() => {
         if (!mapReady) return;
         renderGeoData();
