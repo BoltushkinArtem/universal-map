@@ -1,4 +1,4 @@
-import { FC, useState } from "react";
+import { FC, useState, useEffect } from "react";
 import ProviderSelector from "./components/ProviderSelector";
 import MapEngineWrapper from "./components/MapEngineWrapper";
 import GeoEditorPanel from "./components/GeoEditorPanel";
@@ -20,26 +20,59 @@ const App: FC = () => {
     features: [],
   });
 
+  /**
+   * Основной обработчик обновлений геоданных.
+   * - При любом изменении данных обновляем состояние tempGeoData.
+   * - Если в режиме DrawActionType.MARKER добавлена новая точка — сразу выполняем Finish.
+   */
   const handleUpdateGeoData = (data: GeoJSON.FeatureCollection) => {
+    // Считаем количество точек до и после обновления
+    const prevPoints = tempGeoData.features.filter(f => f.geometry.type === "Point").length;
+    const newPoints = data.features.filter(f => f.geometry.type === "Point").length;
+
     setTempGeoData(data);
+
+    // Если мы в режиме "Marker" и добавлена новая точка — сразу завершаем редактирование
+    if (drawActionType === DrawActionType.MARKER && newPoints > prevPoints) {
+      handleFinishEditing(data);
+    }
   };
 
-  const handleFinishEditing = () => {
-    if (tempGeoData.features.length > 0) {
-      setSavedGeoData({
+  /**
+   * Завершает текущее редактирование:
+   * переносит все временные фичи в сохранённые и очищает временные данные.
+   */
+  const handleFinishEditing = (dataOverride?: GeoJSON.FeatureCollection) => {
+    const sourceData = dataOverride ?? tempGeoData;
+
+    if (sourceData.features.length > 0) {
+      setSavedGeoData(prev => ({
         type: "FeatureCollection",
-        features: [...savedGeoData.features, ...tempGeoData.features.map(f => ({ ...f, properties: { ...f.properties, isTemp: false } }))],
-      });
+        features: [
+          ...prev.features,
+          ...sourceData.features.map(f => ({
+            ...f,
+            properties: { ...f.properties, isTemp: false },
+          })),
+        ],
+      }));
+
       setTempGeoData({ type: "FeatureCollection", features: [] });
       setDrawActionType(undefined);
     }
   };
 
+  /**
+   * Отмена текущего рисования — очищает временные данные и сбрасывает режим.
+   */
   const handleCancelEditing = () => {
     setTempGeoData({ type: "FeatureCollection", features: [] });
     setDrawActionType(undefined);
   };
 
+  /**
+   * Удаление последней точки активной линии.
+   */
   const handleDeleteLastPoint = () => {
     const updated = structuredClone(tempGeoData);
     const lastLine = [...updated.features]
@@ -72,7 +105,7 @@ const App: FC = () => {
           tempGeoData={tempGeoData}
           onDrawAction={setDrawActionType}
           onUpdateGeoData={handleUpdateGeoData}
-          onFinishEditing={handleFinishEditing}
+          onFinishEditing={() => handleFinishEditing()}
           onCancelEditing={handleCancelEditing}
           onDeleteLastPoint={handleDeleteLastPoint}
         />
