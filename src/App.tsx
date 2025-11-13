@@ -88,6 +88,10 @@ const App: FC = () => {
         }
     };
 
+    useEffect(() => {
+        handleCancelEditing()
+    }, [provider])
+
     return (
         <>
             <header className={styles.appHeader}>
