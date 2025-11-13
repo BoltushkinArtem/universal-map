@@ -7,122 +7,122 @@ import styles from "./App.module.scss";
 import { DrawActionType } from "./engines/drawActionType";
 
 const App: FC = () => {
-  const [provider, setProvider] = useState("MapLibre_OSM");
-  const [drawActionType, setDrawActionType] = useState<DrawActionType>();
+    const [provider, setProvider] = useState("MapLibre_OSM");
+    const [drawActionType, setDrawActionType] = useState<DrawActionType>();
 
-  const [tempGeoData, setTempGeoData] = useState<GeoJSON.FeatureCollection>({
-    type: "FeatureCollection",
-    features: [],
-  });
-
-  const [savedGeoData, setSavedGeoData] = useState<GeoJSON.FeatureCollection>({
-    type: "FeatureCollection",
-    features: [],
-  });
-
-  /**
-   * Основной обработчик обновлений геоданных.
-   * - При любом изменении данных обновляем состояние tempGeoData.
-   * - Если в режиме DrawActionType.MARKER добавлена новая точка — сразу выполняем Finish.
-   */
-  const handleUpdateGeoData = (data: GeoJSON.FeatureCollection) => {
-    // Считаем количество точек до и после обновления
-    const prevPoints = tempGeoData.features.filter(f => f.geometry.type === "Point").length;
-    const newPoints = data.features.filter(f => f.geometry.type === "Point").length;
-
-    setTempGeoData(data);
-
-    // Если мы в режиме "Marker" и добавлена новая точка — сразу завершаем редактирование
-    if (drawActionType === DrawActionType.MARKER && newPoints > prevPoints) {
-      handleFinishEditing(data);
-    }
-  };
-
-  /**
-   * Завершает текущее редактирование:
-   * переносит все временные фичи в сохранённые и очищает временные данные.
-   */
-  const handleFinishEditing = (dataOverride?: GeoJSON.FeatureCollection) => {
-    const sourceData = dataOverride ?? tempGeoData;
-
-    if (sourceData.features.length > 0) {
-      setSavedGeoData(prev => ({
+    const [tempGeoData, setTempGeoData] = useState<GeoJSON.FeatureCollection>({
         type: "FeatureCollection",
-        features: [
-          ...prev.features,
-          ...sourceData.features.map(f => ({
-            ...f,
-            properties: { ...f.properties, isTemp: false },
-          })),
-        ],
-      }));
+        features: [],
+    });
 
-      setTempGeoData({ type: "FeatureCollection", features: [] });
-      setDrawActionType(undefined);
-    }
-  };
+    const [savedGeoData, setSavedGeoData] = useState<GeoJSON.FeatureCollection>({
+        type: "FeatureCollection",
+        features: [],
+    });
 
-  /**
-   * Отмена текущего рисования — очищает временные данные и сбрасывает режим.
-   */
-  const handleCancelEditing = () => {
-    setTempGeoData({ type: "FeatureCollection", features: [] });
-    setDrawActionType(undefined);
-  };
+    /**
+     * Основной обработчик обновлений геоданных.
+     * - При любом изменении данных обновляем состояние tempGeoData.
+     * - Если в режиме DrawActionType.MARKER добавлена новая точка — сразу выполняем Finish.
+     */
+    const handleUpdateGeoData = (data: GeoJSON.FeatureCollection) => {
+        // Считаем количество точек до и после обновления
+        const prevPoints = tempGeoData.features.filter(f => f.geometry.type === "Point").length;
+        const newPoints = data.features.filter(f => f.geometry.type === "Point").length;
 
-  /**
-   * Удаление последней точки активной линии.
-   */
-  const handleDeleteLastPoint = () => {
-    const updated = structuredClone(tempGeoData);
-    const lastLine = [...updated.features]
-      .reverse()
-      .find(f => f.geometry.type === "LineString" && f.properties?.isTemp);
+        setTempGeoData(data);
 
-    if (lastLine && lastLine.geometry.type === "LineString") {
-      lastLine.geometry.coordinates.pop();
-      if (lastLine.geometry.coordinates.length === 0) {
-        updated.features = updated.features.filter(f => f !== lastLine);
-      }
-      setTempGeoData(updated);
-    }
-  };
+        // Если мы в режиме "Marker" и добавлена новая точка — сразу завершаем редактирование
+        if (drawActionType === DrawActionType.MARKER && newPoints > prevPoints) {
+            handleFinishEditing(data);
+        }
+    };
 
-  return (
-    <>
-      <header className={styles.appHeader}>
-        <div className={styles.title}>Universal Map</div>
-        <div className={styles.subtitle}>Switch providers in top-right. Clean map view.</div>
-      </header>
+    /**
+     * Завершает текущее редактирование:
+     * переносит все временные фичи в сохранённые и очищает временные данные.
+     */
+    const handleFinishEditing = (dataOverride?: GeoJSON.FeatureCollection) => {
+        const sourceData = dataOverride ?? tempGeoData;
 
-      <div className={styles.appContainer}>
-        <div className={styles.providerWrapper}>
-          <ProviderSelector value={provider} onChange={setProvider} />
-        </div>
+        if (sourceData.features.length > 0) {
+            setSavedGeoData(prev => ({
+                type: "FeatureCollection",
+                features: [
+                    ...prev.features,
+                    ...sourceData.features.map(f => ({
+                        ...f,
+                        properties: { ...f.properties, isTemp: false },
+                    })),
+                ],
+            }));
 
-        <GeoEditorPanel
-          drawActionType={drawActionType}
-          tempGeoData={tempGeoData}
-          onDrawAction={setDrawActionType}
-          onUpdateGeoData={handleUpdateGeoData}
-          onFinishEditing={() => handleFinishEditing()}
-          onCancelEditing={handleCancelEditing}
-          onDeleteLastPoint={handleDeleteLastPoint}
-        />
+            setTempGeoData({ type: "FeatureCollection", features: [] });
+            setDrawActionType(undefined);
+        }
+    };
 
-        <div className={styles.mapArea}>
-          <MapEngineWrapper
-            providerId={provider}
-            drawActionType={drawActionType}
-            markerIconUrl={markerIcon}
-            tempGeoData={tempGeoData}
-            savedGeoData={savedGeoData}
-            onUpdateGeoData={handleUpdateGeoData}
-          />
-        </div>
-      </div>
-    </>
-  );
+    /**
+     * Отмена текущего рисования — очищает временные данные и сбрасывает режим.
+     */
+    const handleCancelEditing = () => {
+        setTempGeoData({ type: "FeatureCollection", features: [] });
+        setDrawActionType(undefined);
+    };
+
+    /**
+     * Удаление последней точки активной линии.
+     */
+    const handleDeleteLastPoint = () => {
+        const updated = structuredClone(tempGeoData);
+        const lastLine = [...updated.features]
+            .reverse()
+            .find(f => f.geometry.type === "LineString" && f.properties?.isTemp);
+
+        if (lastLine && lastLine.geometry.type === "LineString") {
+            lastLine.geometry.coordinates.pop();
+            if (lastLine.geometry.coordinates.length === 0) {
+                updated.features = updated.features.filter(f => f !== lastLine);
+            }
+            setTempGeoData(updated);
+        }
+    };
+
+    return (
+        <>
+            <header className={styles.appHeader}>
+                <div className={styles.title}>Universal Map</div>
+                <div className={styles.subtitle}>Switch providers in top-right. Clean map view.</div>
+            </header>
+
+            <div className={styles.appContainer}>
+                <div className={styles.providerWrapper}>
+                    <ProviderSelector value={provider} onChange={setProvider} />
+                </div>
+
+                <GeoEditorPanel
+                    drawActionType={drawActionType}
+                    tempGeoData={tempGeoData}
+                    onDrawAction={setDrawActionType}
+                    onUpdateGeoData={handleUpdateGeoData}
+                    onFinishEditing={() => handleFinishEditing()}
+                    onCancelEditing={handleCancelEditing}
+                    onDeleteLastPoint={handleDeleteLastPoint}
+                />
+
+                <div className={styles.mapArea}>
+                    <MapEngineWrapper
+                        providerId={provider}
+                        drawActionType={drawActionType}
+                        markerIconUrl={markerIcon}
+                        tempGeoData={tempGeoData}
+                        savedGeoData={savedGeoData}
+                        onUpdateGeoData={handleUpdateGeoData}
+                    />
+                </div>
+            </div>
+        </>
+    );
 };
 
 export default App;
