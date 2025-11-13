@@ -85,7 +85,7 @@ const GoogleEngine: FC<GoogleEngineProps> = ({ providerId, drawActionType, marke
                 }
 
                 clickListenerRef.current = map.addListener("click", (event: google.maps.MapMouseEvent) => {
-                    if (!event.latLng) return;
+                    if (!event.latLng) return; // ✅ защита от undefined
                     const coords: [number, number] = [event.latLng.lng(), event.latLng.lat()];
 
                     setGeoData((prev) => {
@@ -99,18 +99,18 @@ const GoogleEngine: FC<GoogleEngineProps> = ({ providerId, drawActionType, marke
                                 return { ...prev, features: [...prev.features, newFeature] };
                             }
                             case DrawActionType.POLYLINE: {
-                                const lastPolylineIndex = prev.features.findIndex(
+                                const lastIndex = prev.features.findIndex(
                                     (f) => f.properties?.id === "active-polyline" && f.geometry.type === "LineString"
                                 );
 
                                 const updatedPolyline: GeoFeature =
-                                    lastPolylineIndex !== -1
+                                    lastIndex !== -1
                                         ? {
-                                            ...prev.features[lastPolylineIndex],
+                                            ...prev.features[lastIndex],
                                             geometry: {
                                                 type: "LineString",
                                                 coordinates: [
-                                                    ...(prev.features[lastPolylineIndex].geometry as GeoJSON.LineString).coordinates,
+                                                    ...(prev.features[lastIndex].geometry as GeoJSON.LineString).coordinates,
                                                     coords,
                                                 ],
                                             },
@@ -124,7 +124,6 @@ const GoogleEngine: FC<GoogleEngineProps> = ({ providerId, drawActionType, marke
                                 const features = prev.features.filter((f) => f.properties?.id !== "active-polyline");
                                 return { ...prev, features: [...features, updatedPolyline] };
                             }
-
                             default:
                                 return prev;
                         }
@@ -151,6 +150,7 @@ const GoogleEngine: FC<GoogleEngineProps> = ({ providerId, drawActionType, marke
             }
         };
     }, [providerId]);
+
 
     useEffect(() => {
         const map = mapRef.current;

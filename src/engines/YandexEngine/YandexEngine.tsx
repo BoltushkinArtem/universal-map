@@ -1,4 +1,4 @@
-import React, { FC, useEffect, useRef } from "react";
+import React, { FC, useEffect, useRef, useState } from "react";
 import styles from "./YandexEngine.module.scss";
 import { DrawActionType } from "../drawActionType";
 
@@ -8,12 +8,8 @@ declare global {
   }
 }
 
-// Глобальный Promise для однократной загрузки Yandex Maps API
 let yandexMapsPromise: Promise<void> | null = null;
 
-/**
- * Загружает Yandex Maps API один раз и возвращает Promise
- */
 const loadYandexMaps = (apiKey: string): Promise<void> => {
   if (yandexMapsPromise) return yandexMapsPromise;
 
@@ -28,14 +24,11 @@ const loadYandexMaps = (apiKey: string): Promise<void> => {
     script.async = true;
 
     script.onload = () => {
-      if (window.ymaps?.ready) {
-        window.ymaps.ready(resolve);
-      } else {
-        reject(new Error("Yandex Maps failed to load"));
-      }
+      if (window.ymaps?.ready) window.ymaps.ready(resolve);
+      else reject(new Error("Yandex Maps failed to load"));
     };
-
     script.onerror = () => reject(new Error("Failed to load Yandex Maps"));
+
     document.head.appendChild(script);
   });
 
@@ -48,25 +41,27 @@ interface YandexEngineProps {
   markerIconUrl?: string;
 }
 
-/**
- * Компонент YandexEngine отображает карту Яндекса и позволяет рисовать маркеры или полилинии
- */
+const DEFAULT_CENTER: [number, number] = [55.7558, 37.6173];
+const DEFAULT_ZOOM = 10;
+
 const YandexEngine: FC<YandexEngineProps> = ({ providerId, drawActionType, markerIconUrl }) => {
   const containerRef = useRef<HTMLDivElement | null>(null);
   const mapRef = useRef<any>(null);
   const markersRef = useRef<any[]>([]);
-  const polylineRef = useRef<any>(null);
-  const polylinePathRef = useRef<number[][]>([]);
-  const containerIdRef = useRef<string | null>(null);
-  const styleTagRef = useRef<HTMLStyleElement | null>(null);
   const drawActionRef = useRef(drawActionType);
+  const nextIdRef = useRef(1);
+  const styleTagRef = useRef<HTMLStyleElement | null>(null);
+  const containerIdRef = useRef<string | null>(null);
 
-  // Синхронизация ref с пропом drawActionType
+  const [geoData, setGeoData] = useState<GeoJSON.FeatureCollection>({
+    type: "FeatureCollection",
+    features: [],
+  });
+
   useEffect(() => {
     drawActionRef.current = drawActionType;
   }, [drawActionType]);
 
-  // Инициализация карты и полилинии
   useEffect(() => {
     const apiKey = (import.meta.env as any).VITE_YANDEX_API_KEY;
     if (!apiKey || !containerRef.current) return;
@@ -93,8 +88,8 @@ const YandexEngine: FC<YandexEngineProps> = ({ providerId, drawActionType, marke
         const map =
           mapRef.current ||
           new window.ymaps.Map(containerRef.current, {
-            center: [55.7558, 37.6173],
-            zoom: 10,
+            center: DEFAULT_CENTER,
+            zoom: DEFAULT_ZOOM,
             type: mapType,
             controls: [],
           });
@@ -102,58 +97,41 @@ const YandexEngine: FC<YandexEngineProps> = ({ providerId, drawActionType, marke
         mapRef.current = map;
         map.setType(mapType);
 
-        if (!polylineRef.current) {
-          polylineRef.current = new window.ymaps.Polyline([], {
-            strokeColor: "#FF0000",
-            strokeWidth: 3,
-            strokeOpacity: 1,
-          });
-          map.geoObjects.add(polylineRef.current);
-        }
-
         if (!(map as any)._clickHandler) {
           const handleClick = (e: any) => {
-            const coords = e.get("coords");
+            const coords: [number, number] = e.get("coords");
 
             if (drawActionRef.current === DrawActionType.MARKER) {
-              const placemark = new window.ymaps.Placemark(coords, {}, {
-                iconLayout: "default#image",
-                iconImageHref: markerIconUrl || "https://maps.google.com/mapfiles/ms/icons/red-dot.png",
-                iconImageSize: [32, 32],
-                draggable: true,
-              });
-              map.geoObjects.add(placemark);
-              markersRef.current.push(placemark);
+              const newMarker: GeoJSON.Feature<GeoJSON.Point> = {
+                type: "Feature",
+                geometry: { type: "Point", coordinates: coords },
+                properties: { id: nextIdRef.current++, type: "marker" },
+              };
+              setGeoData((prev) => ({
+                ...prev,
+                features: [...prev.features, newMarker],
+              }));
             }
 
-            if (drawActionRef.current === DrawActionType.POLYLINE && polylineRef.current) {
-              const squarePlacemark = new window.ymaps.Placemark(
-                coords,
-                {},
-                {
-                  iconLayout: "default#image",
-                  iconImageHref:
-                    'data:image/svg+xml;charset=UTF-8,' +
-                    encodeURIComponent(`
-                      <svg xmlns="http://www.w3.org/2000/svg" width="10" height="10">
-                        <rect width="10" height="10" fill="white" stroke="black" stroke-width="1"/>
-                      </svg>
-                    `),
-                  iconImageSize: [10, 10],
-                  iconImageOffset: [-5, -5],
-                  draggable: false,
-                }
-              );
+            if (drawActionRef.current === DrawActionType.POLYLINE) {
+              setGeoData((prev) => {
+                const lastIndex = prev.features.findIndex(
+                  (f) => f.properties?.id === "active-polyline" && f.geometry.type === "LineString"
+                );
 
-              map.geoObjects.add(squarePlacemark);
-              markersRef.current.push(squarePlacemark);
+                const coordsArray =
+                  lastIndex !== -1
+                    ? [...(prev.features[lastIndex].geometry as GeoJSON.LineString).coordinates, coords]
+                    : [coords];
 
-              polylinePathRef.current.push(coords);
-              polylineRef.current.geometry.setCoordinates([...polylinePathRef.current]);
-              polylineRef.current.options.set({
-                strokeColor: "#FF0000",
-                strokeWidth: 3,
-                strokeOpacity: 1,
+                const newPolyline: GeoJSON.Feature<GeoJSON.LineString> = {
+                  type: "Feature",
+                  geometry: { type: "LineString", coordinates: coordsArray },
+                  properties: { id: "active-polyline", type: "polyline" },
+                };
+
+                const features = prev.features.filter((f) => f.properties?.id !== "active-polyline");
+                return { ...prev, features: [...features, newPolyline] };
               });
             }
           };
@@ -170,19 +148,74 @@ const YandexEngine: FC<YandexEngineProps> = ({ providerId, drawActionType, marke
 
     return () => {
       isUnmounted = true;
-      if (!mapRef.current) return;
-      if ((mapRef.current as any)._clickHandler) {
-        mapRef.current.events.remove("click", (mapRef.current as any)._clickHandler);
-        (mapRef.current as any)._clickHandler = null;
+      const map = mapRef.current;
+      if (map && (map as any)._clickHandler) {
+        map.events.remove("click", (map as any)._clickHandler);
+        (map as any)._clickHandler = null;
       }
     };
   }, [providerId, markerIconUrl]);
 
-  // Динамическое управление курсором
+  useEffect(() => {
+    const map = mapRef.current;
+    if (!map) return;
+
+    markersRef.current.forEach((m) => map.geoObjects.remove(m));
+    markersRef.current = [];
+
+    geoData.features.forEach((feature) => {
+      if (feature.geometry.type === "Point") {
+        const placemark = new window.ymaps.Placemark(
+          feature.geometry.coordinates,
+          {},
+          {
+            iconLayout: "default#image",
+            iconImageHref: markerIconUrl || "https://maps.google.com/mapfiles/ms/icons/red-dot.png",
+            iconImageSize: [32, 32],
+            draggable: true,
+          }
+        );
+        map.geoObjects.add(placemark);
+        markersRef.current.push(placemark);
+      }
+
+      if (feature.geometry.type === "LineString") {
+        const polyline = new window.ymaps.Polyline(
+          feature.geometry.coordinates,
+          {},
+          { strokeColor: "#FF0000", strokeWidth: 3, strokeOpacity: 1 }
+        );
+        map.geoObjects.add(polyline);
+        markersRef.current.push(polyline);
+
+        (feature.geometry.coordinates as [number, number][]).forEach((coord) => {
+          const squarePlacemark = new window.ymaps.Placemark(
+            coord,
+            {},
+            {
+              iconLayout: "default#image",
+              iconImageHref:
+                'data:image/svg+xml;charset=UTF-8,' +
+                encodeURIComponent(`
+                  <svg xmlns="http://www.w3.org/2000/svg" width="10" height="10">
+                    <rect width="10" height="10" fill="white" stroke="black" stroke-width="1"/>
+                  </svg>
+                `),
+              iconImageSize: [10, 10],
+              iconImageOffset: [-5, -5],
+              draggable: false,
+            }
+          );
+          map.geoObjects.add(squarePlacemark);
+          markersRef.current.push(squarePlacemark);
+        });
+      }
+    });
+  }, [geoData, markerIconUrl]);
+
   useEffect(() => {
     const container = containerRef.current;
-    const containerId = containerIdRef.current;
-    if (!container || !containerId) return;
+    if (!container || !containerIdRef.current) return;
 
     if (!styleTagRef.current) {
       const styleTag = document.createElement("style");
@@ -192,8 +225,8 @@ const YandexEngine: FC<YandexEngineProps> = ({ providerId, drawActionType, marke
 
     const cursorStyle = drawActionRef.current === DrawActionType.POLYLINE ? "crosshair" : "grab";
     styleTagRef.current.innerHTML = `
-      #${containerId} .ymaps-2-1-79-map,
-      #${containerId} .ymaps-2-1-79-map * {
+      #${containerIdRef.current} .ymaps-2-1-79-map,
+      #${containerIdRef.current} .ymaps-2-1-79-map * {
         cursor: ${cursorStyle} !important;
       }
     `;
