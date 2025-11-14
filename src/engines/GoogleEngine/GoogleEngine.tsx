@@ -34,13 +34,8 @@ const GoogleEngine: FC<GoogleEngineProps> = ({ providerId, drawActionType, marke
     const containerRef = useRef<HTMLDivElement | null>(null);
     const mapRef = useRef<google.maps.Map | null>(null);
 
-    /** Маркеры точек */
     const pointMarkersRef = useRef<Map<string, google.maps.Marker>>(new Map());
-
-    /** Квадратики полилинии */
     const polylinePointMarkersRef = useRef<google.maps.Marker[]>([]);
-
-    /** Глобальная polyline */
     const polylineRef = useRef<google.maps.Polyline | null>(null);
 
     const clickListenerRef = useRef<google.maps.MapsEventListener | null>(null);
@@ -49,10 +44,7 @@ const GoogleEngine: FC<GoogleEngineProps> = ({ providerId, drawActionType, marke
 
     const drawActionRef = useRef(drawActionType);
 
-    const [geoData, setGeoData] = useState<GeoData>({
-        type: "FeatureCollection",
-        features: [],
-    });
+    const [geoData, setGeoData] = useState<GeoData | undefined>();
 
     useEffect(() => {
         drawActionRef.current = drawActionType;
@@ -83,7 +75,6 @@ const GoogleEngine: FC<GoogleEngineProps> = ({ providerId, drawActionType, marke
                 });
                 mapRef.current = map;
 
-                /** Создаём polyline один раз */
                 if (!polylineRef.current) {
                     polylineRef.current = new google.maps.Polyline({
                         path: [],
@@ -95,12 +86,13 @@ const GoogleEngine: FC<GoogleEngineProps> = ({ providerId, drawActionType, marke
                     });
                 }
 
-                /** Обработка кликов */
                 clickListenerRef.current = map.addListener("click", (event: google.maps.MapMouseEvent) => {
                     if (!event.latLng) return;
                     const coords: [number, number] = [event.latLng.lng(), event.latLng.lat()];
 
                     setGeoData((prev) => {
+                        const current = prev ?? { type: "FeatureCollection", features: [] };
+
                         switch (drawActionRef.current) {
                             case DrawActionType.MARKER: {
                                 const newFeature: GeoFeature = normalizeGeoData({
@@ -108,22 +100,22 @@ const GoogleEngine: FC<GoogleEngineProps> = ({ providerId, drawActionType, marke
                                     features: [{
                                         type: "Feature",
                                         geometry: { type: "Point", coordinates: coords },
-                                        properties: { type: "marker", isTemp: false }
+                                        properties: { type: "marker", isTemp: false, id: `marker-${Date.now()}` },
                                     }]
                                 }).features[0];
 
-                                return { ...prev, features: [...prev.features, newFeature] };
+                                return { ...current, features: [...current.features, newFeature] };
                             }
 
                             case DrawActionType.POLYLINE: {
-                                const lastIndex = prev.features.findIndex(
+                                const lastIndex = current.features.findIndex(
                                     (f) => f.properties.id === "active-polyline" && f.geometry.type === "LineString"
                                 );
 
                                 let updated: GeoFeature;
 
                                 if (lastIndex !== -1) {
-                                    const existing = prev.features[lastIndex];
+                                    const existing = current.features[lastIndex];
                                     updated = {
                                         ...existing,
                                         geometry: {
@@ -147,12 +139,12 @@ const GoogleEngine: FC<GoogleEngineProps> = ({ providerId, drawActionType, marke
                                     updated = newLineFeature;
                                 }
 
-                                const other = prev.features.filter(f => f.properties.id !== "active-polyline");
-                                return { ...prev, features: [...other, updated] };
+                                const other = current.features.filter(f => f.properties.id !== "active-polyline");
+                                return { ...current, features: [...other, updated] };
                             }
 
                             default:
-                                return prev;
+                                return current;
                         }
                     });
                 });
@@ -184,19 +176,20 @@ const GoogleEngine: FC<GoogleEngineProps> = ({ providerId, drawActionType, marke
         };
     }, [providerId]);
 
-    /** Обновление визуализации без пересоздания старых элементов */
+    /** Рендер маркеров и полилиний */
     useEffect(() => {
         const map = mapRef.current;
-        if (!map) return;
+        if (!map || !geoData) return;
 
-        /** ---------- 1. РЕНДЕР ТОЧЕК (MARKER) ---------- */
+        // Маркеры точек
         const markerFeatures = geoData.features.filter((f) => f.properties.type === "marker");
         for (const feature of markerFeatures) {
             if (feature.geometry.type !== "Point") continue;
             const id = feature.properties.id;
             if (!pointMarkersRef.current.has(id)) {
+                const [lng, lat] = feature.geometry.coordinates as [number, number];
                 const marker = new google.maps.Marker({
-                    position: new google.maps.LatLng(feature.geometry.coordinates[1], feature.geometry.coordinates[0]),
+                    position: new google.maps.LatLng(lat, lng),
                     map,
                     icon: markerIconUrl ? { url: markerIconUrl, scaledSize: new google.maps.Size(32, 32) } : undefined,
                 });
@@ -204,34 +197,33 @@ const GoogleEngine: FC<GoogleEngineProps> = ({ providerId, drawActionType, marke
             }
         }
 
-        /** ---------- 2. РЕНДЕР ПОЛИЛИНИИ ---------- */
+        // Полилиния
         const polyFeature = geoData.features.find((f) => f.properties.type === "polyline");
-        if (!polyFeature || polyFeature.geometry.type !== "LineString") return;
+        if (polyFeature?.geometry.type === "LineString") {
+            const coords = polyFeature.geometry.coordinates as [number, number][];
+            const path = coords.map(([lng, lat]) => new google.maps.LatLng(lat, lng));
+            polylineRef.current?.setPath(path);
 
-        const coords = polyFeature.geometry.coordinates;
-        const path = coords.map(([lng, lat]) => new google.maps.LatLng(lat, lng));
-        polylineRef.current?.setPath(path);
-
-        /** ---------- 3. ДОБАВЛЕНИЕ НОВЫХ КВАДРАТИКОВ ПОЛИЛИНИИ ---------- */
-        const existingCount = polylinePointMarkersRef.current.length;
-        for (let i = existingCount; i < coords.length; i++) {
-            const [lng, lat] = coords[i];
-            const squareMarker = new google.maps.Marker({
-                position: new google.maps.LatLng(lat, lng),
-                map,
-                icon: {
-                    url:
-                        "data:image/svg+xml;charset=UTF-8," +
-                        encodeURIComponent(`
-                            <svg width="10" height="10" xmlns="http://www.w3.org/2000/svg">
-                                <rect width="10" height="10" fill="white" stroke="black" stroke-width="1"/>
-                            </svg>
-                        `),
-                    scaledSize: new google.maps.Size(10, 10),
-                },
-                clickable: false,
-            });
-            polylinePointMarkersRef.current.push(squareMarker);
+            const existingCount = polylinePointMarkersRef.current.length;
+            for (let i = existingCount; i < coords.length; i++) {
+                const [lng, lat] = coords[i];
+                const squareMarker = new google.maps.Marker({
+                    position: new google.maps.LatLng(lat, lng),
+                    map,
+                    icon: {
+                        url:
+                            "data:image/svg+xml;charset=UTF-8," +
+                            encodeURIComponent(`
+                                <svg width="10" height="10" xmlns="http://www.w3.org/2000/svg">
+                                    <rect width="10" height="10" fill="white" stroke="black" stroke-width="1"/>
+                                </svg>
+                            `),
+                        scaledSize: new google.maps.Size(10, 10),
+                    },
+                    clickable: false,
+                });
+                polylinePointMarkersRef.current.push(squareMarker);
+            }
         }
     }, [geoData, markerIconUrl]);
 
