@@ -4,7 +4,6 @@ import { DrawActionType } from "../../engines/drawActionType";
 
 interface GeoEditorPanelProps {
     drawActionType?: DrawActionType;
-    tempGeoData: GeoJSON.FeatureCollection;
     onDrawAction: (type?: DrawActionType) => void;
     onUpdateGeoData: (data: GeoJSON.FeatureCollection) => void;
     onFinishEditing: () => void;
@@ -20,7 +19,6 @@ interface DrawAction {
 
 const GeoEditorPanel: FC<GeoEditorPanelProps> = ({
     drawActionType,
-    tempGeoData,
     onDrawAction,
     onUpdateGeoData,
     onFinishEditing,
@@ -94,13 +92,6 @@ const GeoEditorPanel: FC<GeoEditorPanelProps> = ({
             </div>
 
             {renderActiveActionButtons()}
-
-            {drawActionType && (
-                <div className={styles.status}>
-                    Active mode: <b>{drawActionType}</b> | Features:{" "}
-                    {tempGeoData.features.length}
-                </div>
-            )}
         </div>
     );
 };

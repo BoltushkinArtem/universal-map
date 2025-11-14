@@ -106,7 +106,6 @@ const App: FC = () => {
 
                 <GeoEditorPanel
                     drawActionType={drawActionType}
-                    tempGeoData={tempGeoData}
                     onDrawAction={setDrawActionType}
                     onUpdateGeoData={handleUpdateGeoData}
                     onFinishEditing={() => handleFinishEditing()}
