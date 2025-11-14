@@ -1,4 +1,4 @@
-import React, { FC, useEffect, useRef, useState } from "react";
+import React, { FC, useCallback, useEffect, useRef, useState } from "react";
 import styles from "./GoogleEngine.module.scss";
 import { DrawActionType } from "../drawActionType";
 import { GeoData, GeoFeature } from "../geoDataType";
@@ -73,7 +73,9 @@ const GoogleEngine: FC<GoogleEngineProps> = ({ providerId, drawActionType, marke
                 });
 
                 initPolyline();
-                attachClickListener();
+                if (!mapRef.current) return;
+
+                clickListenerRef.current = mapRef.current.addListener("click", handleMapClick)
             } catch (error) {
                 console.error("Google Maps initialization failed:", error);
             }
@@ -104,16 +106,13 @@ const GoogleEngine: FC<GoogleEngineProps> = ({ providerId, drawActionType, marke
         }
     };
 
-    const attachClickListener = () => {
-        if (!mapRef.current) return;
-
-        clickListenerRef.current = mapRef.current.addListener("click", (event: google.maps.MapMouseEvent) => {
+    const handleMapClick = useCallback(
+        (event: google.maps.MapMouseEvent) => {
             if (!event.latLng) return;
             const coords: [number, number] = [event.latLng.lng(), event.latLng.lat()];
 
             setGeoData(prev => updateGeoData(prev, coords));
-        });
-    };
+        }, [geoData])
 
     const updateGeoData = (prev: GeoData | undefined, coords: [number, number]): GeoData => {
         const current = prev ?? { type: "FeatureCollection", features: [] };
