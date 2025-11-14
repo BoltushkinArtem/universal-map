@@ -5,14 +5,15 @@ import YandexEngine from "../../engines/YandexEngine";
 import ArcGISEngine from "../../engines/ArcGISEngine";
 import styles from "./MapEngineWrapper.module.scss";
 import { DrawActionType } from "../../engines/drawActionType";
+import { GeoData } from "../../engines/geoDataType";
 
 interface MapEngineWrapperProps {
     providerId: string;
     drawActionType?: DrawActionType;
     markerIconUrl?: string;
-    tempGeoData: GeoJSON.FeatureCollection;
-    savedGeoData: GeoJSON.FeatureCollection;
-    onUpdateGeoData: (data: GeoJSON.FeatureCollection) => void;
+    tempGeoData: GeoData;
+    savedGeoData: GeoData;
+    onUpdateGeoData: (data: GeoData) => void;
 }
 
 const MapEngineWrapper: FC<MapEngineWrapperProps> = ({
@@ -65,6 +66,9 @@ const MapEngineWrapper: FC<MapEngineWrapperProps> = ({
                     providerId={providerId}
                     drawActionType={drawActionType}
                     markerIconUrl={markerIconUrl}
+                    tempGeoData={tempGeoData}
+                    savedGeoData={savedGeoData}
+                    onUpdateGeoData={onUpdateGeoData}
                 />
             );
         }

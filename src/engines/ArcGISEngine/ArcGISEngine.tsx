@@ -1,14 +1,16 @@
 import React, { FC, useEffect, useRef, useState, useCallback } from "react";
 import styles from "./ArcGISEngine.module.scss";
 import { DrawActionType } from "../drawActionType";
+import { GeoData, GeoFeature } from "../geoDataType";
+import { normalizeGeoData } from "../../utils/geoDataNormalizer";
 
 interface ArcGISEngineProps {
   providerId: string;
   drawActionType?: DrawActionType;
   markerIconUrl?: string;
-  tempGeoData: GeoJSON.FeatureCollection;
-  savedGeoData?: GeoJSON.FeatureCollection;
-  onUpdateGeoData: (data: GeoJSON.FeatureCollection) => void;
+  tempGeoData: GeoData;
+  savedGeoData?: GeoData;
+  onUpdateGeoData: (data: GeoData) => void;
 }
 
 const DEFAULT_CENTER: [number, number] = [37.6173, 55.7558];
@@ -134,28 +136,26 @@ const ArcGISEngine: FC<ArcGISEngineProps> = ({
       const { longitude, latitude } = event.mapPoint;
       const coord: [number, number] = [longitude, latitude];
 
+      const normalizedTempData = normalizeGeoData(tempGeoData);
+      const cloned: GeoData =
+        typeof structuredClone === "function"
+          ? structuredClone(normalizedTempData)
+          : JSON.parse(JSON.stringify(normalizedTempData));
+
+      cloned.features = Array.isArray(cloned.features) ? cloned.features : [];
+
       if (action === DrawActionType.MARKER) {
         const id = `marker-${nextIdRef.current++}`;
-        const newFeature: GeoJSON.Feature = {
+        cloned.features.push({
           type: "Feature",
           geometry: { type: "Point", coordinates: coord },
-          properties: { id, type: "marker" },
-        };
-        onUpdateGeoData({
-          type: "FeatureCollection",
-          features: [...(tempGeoData?.features ?? []), newFeature],
+          properties: { id, type: "marker", isTemp: false },
         });
+        onUpdateGeoData(cloned);
         return;
       }
 
       if (action === DrawActionType.POLYLINE) {
-        const cloned: GeoJSON.FeatureCollection =
-          typeof structuredClone === "function"
-            ? structuredClone(tempGeoData ?? { type: "FeatureCollection", features: [] })
-            : JSON.parse(JSON.stringify(tempGeoData ?? { type: "FeatureCollection", features: [] }));
-
-        cloned.features = Array.isArray(cloned.features) ? cloned.features : [];
-
         const tempLine = cloned.features
           .slice()
           .reverse()
@@ -167,7 +167,7 @@ const ArcGISEngine: FC<ArcGISEngineProps> = ({
           cloned.features.push({
             type: "Feature",
             geometry: { type: "LineString", coordinates: [coord] },
-            properties: { id: nextIdRef.current++, type: "polyline", isTemp: true },
+            properties: { id: `polyline-${nextIdRef.current++}`, type: "polyline", isTemp: true },
           });
         }
 
@@ -196,7 +196,7 @@ const ArcGISEngine: FC<ArcGISEngineProps> = ({
 
     graphicsLayer.removeAll();
 
-    const allFeatures: GeoJSON.Feature[] = [
+    const allFeatures: GeoFeature[] = [
       ...(savedGeoData?.features ?? []),
       ...(tempGeoData?.features ?? []),
     ];

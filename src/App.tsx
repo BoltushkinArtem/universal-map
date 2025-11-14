@@ -5,17 +5,18 @@ import GeoEditorPanel from "./components/GeoEditorPanel";
 import markerIcon from "./assets/icons/marker.png";
 import styles from "./App.module.scss";
 import { DrawActionType } from "./engines/drawActionType";
+import { GeoData } from "./engines/geoDataType";
 
 const App: FC = () => {
     const [provider, setProvider] = useState("MapLibre_OSM");
     const [drawActionType, setDrawActionType] = useState<DrawActionType>();
 
-    const [tempGeoData, setTempGeoData] = useState<GeoJSON.FeatureCollection>({
+    const [tempGeoData, setTempGeoData] = useState<GeoData>({
         type: "FeatureCollection",
         features: [],
     });
 
-    const [savedGeoData, setSavedGeoData] = useState<GeoJSON.FeatureCollection>({
+    const [savedGeoData, setSavedGeoData] = useState<GeoData>({
         type: "FeatureCollection",
         features: [],
     });
@@ -25,7 +26,7 @@ const App: FC = () => {
      * - При любом изменении данных обновляем состояние tempGeoData.
      * - Если в режиме DrawActionType.MARKER добавлена новая точка — сразу выполняем Finish.
      */
-    const handleUpdateGeoData = (data: GeoJSON.FeatureCollection) => {
+    const handleUpdateGeoData = (data: GeoData) => {
         // Считаем количество точек до и после обновления
         const prevPoints = tempGeoData.features.filter(f => f.geometry.type === "Point").length;
         const newPoints = data.features.filter(f => f.geometry.type === "Point").length;
@@ -42,7 +43,7 @@ const App: FC = () => {
      * Завершает текущее редактирование:
      * переносит все временные фичи в сохранённые и очищает временные данные.
      */
-    const handleFinishEditing = (dataOverride?: GeoJSON.FeatureCollection) => {
+    const handleFinishEditing = (dataOverride?: GeoData) => {
         const sourceData = dataOverride ?? tempGeoData;
 
         if (sourceData.features.length > 0) {

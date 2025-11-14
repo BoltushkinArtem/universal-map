@@ -4,14 +4,16 @@ import "maplibre-gl/dist/maplibre-gl.css";
 import { tileTemplate } from "../../utils/providers";
 import styles from "./MapLibreEngine.module.scss";
 import { DrawActionType } from "../drawActionType";
+import { GeoData, GeoFeature } from "../geoDataType";
+import { normalizeGeoData } from "../../utils/geoDataNormalizer";
 
 interface MapLibreEngineProps {
     providerId: string;
     drawActionType?: DrawActionType;
     markerIconUrl?: string;
-    tempGeoData: GeoJSON.FeatureCollection;
-    savedGeoData?: GeoJSON.FeatureCollection;
-    onUpdateGeoData: (data: GeoJSON.FeatureCollection) => void;
+    tempGeoData: GeoData;
+    savedGeoData?: GeoData;
+    onUpdateGeoData: (data: GeoData) => void;
 }
 
 const DEFAULT_CENTER: [number, number] = [37.6173, 55.7558];
@@ -100,9 +102,10 @@ const MapLibreEngine: FC<MapLibreEngineProps> = ({
         }
     }, [drawActionType]);
 
-    const isLineFeature = (f: GeoJSON.Feature): f is GeoJSON.Feature<GeoJSON.LineString> =>
+    const isLineFeature = (f: GeoFeature): f is GeoFeature & { geometry: { type: "LineString"; coordinates: [number, number][] } } =>
         f.geometry.type === "LineString";
-    const isPointFeature = (f: GeoJSON.Feature): f is GeoJSON.Feature<GeoJSON.Point> =>
+
+    const isPointFeature = (f: GeoFeature): f is GeoFeature & { geometry: { type: "Point"; coordinates: [number, number] } } =>
         f.geometry.type === "Point";
 
     const handleMapClick = useCallback(
@@ -112,52 +115,42 @@ const MapLibreEngine: FC<MapLibreEngineProps> = ({
 
             const coords: [number, number] = [event.lngLat.lng, event.lngLat.lat];
 
-            if (action === DrawActionType.MARKER) {
-                const id = `marker-${nextIdRef.current++}`;
-                const newFeature: GeoJSON.Feature<GeoJSON.Point> = {
-                    type: "Feature",
-                    geometry: { type: "Point", coordinates: coords },
-                    properties: { id, type: "marker" },
-                };
-
-                // Сохраняем в markersRef сразу (создастся в renderMarkers)
-                markersRef.current.set(id, null as any);
-
-                onUpdateGeoData({
-                    type: "FeatureCollection",
-                    features: [...(tempGeoData.features ?? []), newFeature],
-                });
-                return;
-            }
-
-            const cloned: GeoJSON.FeatureCollection =
+            const normalizedTempData = normalizeGeoData(tempGeoData);
+            const cloned: GeoData =
                 typeof structuredClone === "function"
-                    ? structuredClone(tempGeoData)
-                    : JSON.parse(JSON.stringify(tempGeoData || { type: "FeatureCollection", features: [] }));
+                    ? structuredClone(normalizedTempData)
+                    : JSON.parse(JSON.stringify(normalizedTempData));
 
             cloned.features = Array.isArray(cloned.features) ? cloned.features : [];
+
+            if (action === DrawActionType.MARKER) {
+                const id = `marker-${nextIdRef.current++}`;
+                cloned.features.push({
+                    type: "Feature",
+                    geometry: { type: "Point", coordinates: coords },
+                    properties: { id, type: "marker", isTemp: false },
+                });
+                onUpdateGeoData(cloned);
+                return;
+            }
 
             if (action === DrawActionType.POLYLINE) {
                 const tempLine = cloned.features
                     .slice()
                     .reverse()
-                    .find(
-                        (f): f is GeoJSON.Feature<GeoJSON.LineString> =>
-                            isLineFeature(f) && f.properties?.isTemp
-                    );
+                    .find(f => isLineFeature(f) && f.properties?.isTemp);
 
                 if (tempLine) {
-                    tempLine.geometry.coordinates.push(coords);
+                    (tempLine.geometry.coordinates as [number, number][]).push(coords);
                 } else {
                     cloned.features.push({
                         type: "Feature",
                         geometry: { type: "LineString", coordinates: [coords] },
-                        properties: { id: nextIdRef.current++, type: "polyline", isTemp: true },
+                        properties: { id: `polyline-${nextIdRef.current++}`, type: "polyline", isTemp: true },
                     });
                 }
 
                 onUpdateGeoData(cloned);
-                return;
             }
         },
         [tempGeoData, onUpdateGeoData]
@@ -174,26 +167,26 @@ const MapLibreEngine: FC<MapLibreEngineProps> = ({
         const map = mapRef.current;
         if (!map) return;
 
-        const allFeatures: GeoJSON.Feature<GeoJSON.Point>[] = [
-            ...(savedGeoData?.features ?? []),
-            ...(tempGeoData.features ?? []),
-        ].filter(isPointFeature);
+        const normalizedSaved = normalizeGeoData(savedGeoData);
+        const normalizedTemp = normalizeGeoData(tempGeoData);
+
+        const allPoints = [...normalizedSaved.features, ...normalizedTemp.features].filter(isPointFeature);
 
         const newIds = new Set<string>();
 
-        allFeatures.forEach((feature) => {
+        allPoints.forEach((feature) => {
             const id = feature.properties?.id?.toString();
             if (!id) return;
 
             newIds.add(id);
-            let marker = markersRef.current.get(id);
 
-            const coordinates = feature.geometry.coordinates as [number, number];
+            let marker = markersRef.current.get(id);
+            const [lng, lat] = feature.geometry.coordinates;
 
             if (marker) {
                 const curr = marker.getLngLat();
-                if (curr.lng !== coordinates[0] || curr.lat !== coordinates[1]) {
-                    marker.setLngLat(coordinates as LngLatLike);
+                if (curr.lng !== lng || curr.lat !== lat) {
+                    marker.setLngLat([lng, lat] as LngLatLike);
                 }
             } else {
                 const el = document.createElement("div");
@@ -204,15 +197,11 @@ const MapLibreEngine: FC<MapLibreEngineProps> = ({
                 el.style.backgroundSize = "contain";
                 el.style.backgroundRepeat = "no-repeat";
 
-                marker = new maplibregl.Marker({ element: el })
-                    .setLngLat(coordinates as LngLatLike)
-                    .addTo(map);
-
+                marker = new maplibregl.Marker({ element: el }).setLngLat([lng, lat] as LngLatLike).addTo(map);
                 markersRef.current.set(id, marker);
             }
         });
 
-        // Удаляем маркеры, которых больше нет в данных
         markersRef.current.forEach((marker, id) => {
             if (!newIds.has(id)) {
                 marker.remove();
@@ -225,18 +214,22 @@ const MapLibreEngine: FC<MapLibreEngineProps> = ({
         const map = mapRef.current;
         if (!map) return;
 
-        const allFeatures: GeoJSON.Feature[] = [
-            ...(savedGeoData?.features ?? []),
-            ...(tempGeoData.features ?? []),
-        ];
+        const normalizedSaved = normalizeGeoData(savedGeoData);
+        const normalizedTemp = normalizeGeoData(tempGeoData);
+        const allFeatures = [...normalizedSaved.features, ...normalizedTemp.features];
 
-        const lineFeatures = allFeatures.filter(isLineFeature) as GeoJSON.Feature<GeoJSON.LineString>[];
+        const lineFeatures = allFeatures.filter(isLineFeature);
+
+        // линии
         const lineSourceId = "geo-lines";
         const lineCollection: GeoJSON.FeatureCollection<GeoJSON.LineString> = {
             type: "FeatureCollection",
-            features: lineFeatures,
+            features: lineFeatures.map(f => ({
+                type: "Feature",
+                geometry: { type: "LineString", coordinates: f.geometry.coordinates as [number, number][] },
+                properties: f.properties ?? {},
+            })),
         };
-
         if (map.getSource(lineSourceId)) {
             (map.getSource(lineSourceId) as GeoJSONSource).setData(lineCollection);
         } else if (lineFeatures.length > 0) {
@@ -249,10 +242,11 @@ const MapLibreEngine: FC<MapLibreEngineProps> = ({
             });
         }
 
-        const vertexFeatures: GeoJSON.Feature<GeoJSON.Point>[] = lineFeatures.flatMap((lf) =>
-            (lf.geometry as GeoJSON.LineString).coordinates.map((coord, idx) => ({
+        // вершины линий
+        const vertexFeatures: GeoJSON.Feature<GeoJSON.Point>[] = lineFeatures.flatMap(lf =>
+            lf.geometry.coordinates.map((coord, idx) => ({
                 type: "Feature",
-                geometry: { type: "Point", coordinates: coord },
+                geometry: { type: "Point", coordinates: coord as [number, number] },
                 properties: { id: `${lf.properties?.id ?? "ln"}-${idx}` },
             }))
         );
@@ -262,7 +256,6 @@ const MapLibreEngine: FC<MapLibreEngineProps> = ({
             type: "FeatureCollection",
             features: vertexFeatures,
         };
-
         if (map.getSource(vertexSourceId)) {
             (map.getSource(vertexSourceId) as GeoJSONSource).setData(vertexCollection);
         } else if (vertexFeatures.length > 0) {

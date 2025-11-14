@@ -1,11 +1,12 @@
 import { FC } from "react";
 import styles from "./GeoEditorPanel.module.scss";
 import { DrawActionType } from "../../engines/drawActionType";
+import { GeoData } from "../../engines/geoDataType";
 
 interface GeoEditorPanelProps {
     drawActionType?: DrawActionType;
     onDrawAction: (type?: DrawActionType) => void;
-    onUpdateGeoData: (data: GeoJSON.FeatureCollection) => void;
+    onUpdateGeoData: (data: GeoData) => void;
     onFinishEditing: () => void;
     onCancelEditing: () => void;
     onDeleteLastPoint: () => void;
