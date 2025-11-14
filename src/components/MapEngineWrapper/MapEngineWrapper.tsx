@@ -51,6 +51,9 @@ const MapEngineWrapper: FC<MapEngineWrapperProps> = ({
                     providerId={providerId}
                     drawActionType={drawActionType}
                     markerIconUrl={markerIconUrl}
+                    tempGeoData={tempGeoData}
+                    savedGeoData={savedGeoData}
+                    onUpdateGeoData={onUpdateGeoData}
                 />
             );
         }

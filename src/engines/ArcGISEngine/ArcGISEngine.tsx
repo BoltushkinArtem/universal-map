@@ -3,235 +3,247 @@ import styles from "./ArcGISEngine.module.scss";
 import { DrawActionType } from "../drawActionType";
 
 interface ArcGISEngineProps {
-    providerId: string;
-    drawActionType?: DrawActionType;
-    markerIconUrl?: string;
+  providerId: string;
+  drawActionType?: DrawActionType;
+  markerIconUrl?: string;
+  tempGeoData: GeoJSON.FeatureCollection;
+  savedGeoData?: GeoJSON.FeatureCollection;
+  onUpdateGeoData: (data: GeoJSON.FeatureCollection) => void;
 }
 
 const DEFAULT_CENTER: [number, number] = [37.6173, 55.7558];
 const DEFAULT_ZOOM = 10;
 
 const ArcGISEngine: FC<ArcGISEngineProps> = ({
-    providerId,
-    drawActionType,
-    markerIconUrl,
+  providerId,
+  drawActionType,
+  markerIconUrl,
+  tempGeoData,
+  savedGeoData,
+  onUpdateGeoData,
 }) => {
-    const containerRef = useRef<HTMLDivElement | null>(null);
-    const viewRef = useRef<__esri.MapView | null>(null);
-    const graphicsLayerRef = useRef<__esri.GraphicsLayer | null>(null);
-    const polylineGraphicRef = useRef<__esri.Graphic | null>(null);
-    const clickHandlerRef = useRef<__esri.WatchHandle | null>(null);
+  const containerRef = useRef<HTMLDivElement | null>(null);
+  const viewRef = useRef<__esri.MapView | null>(null);
+  const graphicsLayerRef = useRef<__esri.GraphicsLayer | null>(null);
+  const drawActionRef = useRef(drawActionType);
+  const nextIdRef = useRef(1);
 
-    const drawActionRef = useRef<DrawActionType | undefined>(drawActionType);
-    const polylineCoordsRef = useRef<number[][]>([]);
+  const [mapReady, setMapReady] = useState(false);
 
-    // Все маркеры и линии хранятся в одной GeoJSON FeatureCollection
-    const [geoData, setGeoData] = useState<GeoJSON.FeatureCollection>({
-        type: "FeatureCollection",
-        features: [],
-    });
+  const esriModulesRef = useRef<{
+    Graphic?: typeof __esri.Graphic;
+    Point?: typeof __esri.Point;
+    Polyline?: typeof __esri.Polyline;
+    PictureMarkerSymbol?: typeof __esri.PictureMarkerSymbol;
+    SimpleLineSymbol?: typeof __esri.SimpleLineSymbol;
+  }>({});
 
-    // Обновляем текущий режим рисования
-    useEffect(() => {
-        drawActionRef.current = drawActionType;
-        if (containerRef.current) {
-            containerRef.current.style.cursor = drawActionType ? "crosshair" : "grab";
+  // ---- UPDATE DRAW ACTION ----
+  useEffect(() => {
+    drawActionRef.current = drawActionType;
+    if (containerRef.current) {
+      containerRef.current.style.cursor = drawActionType ? "crosshair" : "grab";
+    }
+  }, [drawActionType]);
+
+  // ---- LOAD ARCGIS MAP ----
+  useEffect(() => {
+    let cancelled = false;
+
+    const loadApi = async () => {
+      if ((window as any).require) return;
+
+      const link = document.createElement("link");
+      link.rel = "stylesheet";
+      link.href = "https://js.arcgis.com/4.26/esri/themes/light/main.css";
+      document.head.appendChild(link);
+
+      await new Promise<void>((resolve, reject) => {
+        const script = document.createElement("script");
+        script.src = "https://js.arcgis.com/4.26/";
+        script.onload = () => resolve();
+        script.onerror = reject;
+        document.body.appendChild(script);
+      });
+    };
+
+    const initMap = () => {
+      (window as any).require(
+        [
+          "esri/Map",
+          "esri/views/MapView",
+          "esri/layers/GraphicsLayer",
+          "esri/Graphic",
+          "esri/geometry/Point",
+          "esri/geometry/Polyline",
+          "esri/symbols/PictureMarkerSymbol",
+          "esri/symbols/SimpleLineSymbol",
+        ],
+        (
+          Map: typeof __esri.Map,
+          MapView: typeof __esri.MapView,
+          GraphicsLayer: typeof __esri.GraphicsLayer,
+          Graphic: typeof __esri.Graphic,
+          Point: typeof __esri.Point,
+          Polyline: typeof __esri.Polyline,
+          PictureMarkerSymbol: typeof __esri.PictureMarkerSymbol,
+          SimpleLineSymbol: typeof __esri.SimpleLineSymbol
+        ) => {
+          if (cancelled || !containerRef.current) return;
+
+          const map = new Map({
+            basemap: providerId === "MapLibre_ArcGISAero" ? "satellite" : "streets-vector",
+          });
+
+          const view = new MapView({
+            container: containerRef.current,
+            map,
+            center: DEFAULT_CENTER,
+            zoom: DEFAULT_ZOOM,
+          });
+
+          const graphicsLayer = new GraphicsLayer();
+          map.add(graphicsLayer);
+
+          viewRef.current = view;
+          graphicsLayerRef.current = graphicsLayer;
+
+          esriModulesRef.current = { Graphic, Point, Polyline, PictureMarkerSymbol, SimpleLineSymbol };
+
+          view.when(() => !cancelled && setMapReady(true));
         }
-    }, [drawActionType]);
+      );
+    };
 
-    // Инициализация ArcGIS API и карты
-    useEffect(() => {
-        let cancelled = false;
+    loadApi().then(() => !cancelled && initMap());
 
-        const loadArcGisApi = async (): Promise<void> => {
-            if ((window as any).require) return;
+    return () => {
+      cancelled = true;
+      viewRef.current?.destroy();
+      viewRef.current = null;
+      graphicsLayerRef.current = null;
+    };
+  }, [providerId]);
 
-            const cssLink = document.createElement("link");
-            cssLink.rel = "stylesheet";
-            cssLink.href = "https://js.arcgis.com/4.26/esri/themes/light/main.css";
-            document.head.appendChild(cssLink);
+  // ---- HANDLE DRAWING ----
+  const handleMapClick = useCallback(
+    (event: __esri.ViewClickEvent) => {
+      const action = drawActionRef.current;
+      if (!action) return;
 
-            await new Promise<void>((resolve, reject) => {
-                const script = document.createElement("script");
-                script.src = "https://js.arcgis.com/4.26/";
-                script.async = true;
-                script.onload = () => resolve();
-                script.onerror = () => reject(new Error("ArcGIS API failed to load"));
-                document.head.appendChild(script);
-            });
+      const { longitude, latitude } = event.mapPoint;
+      const coord: [number, number] = [longitude, latitude];
+
+      if (action === DrawActionType.MARKER) {
+        const id = `marker-${nextIdRef.current++}`;
+        const newFeature: GeoJSON.Feature = {
+          type: "Feature",
+          geometry: { type: "Point", coordinates: coord },
+          properties: { id, type: "marker" },
         };
-
-        const initializeMap = async (): Promise<void> => {
-            await loadArcGisApi();
-            if (cancelled || !containerRef.current) return;
-
-            (window as any).require(
-                [
-                    "esri/Map",
-                    "esri/views/MapView",
-                    "esri/Graphic",
-                    "esri/layers/GraphicsLayer",
-                    "esri/geometry/Point",
-                    "esri/geometry/Polyline",
-                    "esri/symbols/SimpleLineSymbol",
-                    "esri/symbols/PictureMarkerSymbol",
-                ],
-                (
-                    Map: typeof __esri.Map,
-                    MapView: typeof __esri.MapView,
-                    Graphic: typeof __esri.Graphic,
-                    GraphicsLayer: typeof __esri.GraphicsLayer,
-                    Point: typeof __esri.Point,
-                    Polyline: typeof __esri.Polyline,
-                    SimpleLineSymbol: typeof __esri.SimpleLineSymbol,
-                    PictureMarkerSymbol: typeof __esri.PictureMarkerSymbol
-                ) => {
-                    if (cancelled) return;
-
-                    // Создаем карту
-                    const map = new Map({
-                        basemap: providerId === "MapLibre_ArcGISAero" ? "satellite" : "streets-vector",
-                    });
-
-                    // Создаем view
-                    const view = new MapView({
-                        container: containerRef.current!,
-                        map,
-                        center: DEFAULT_CENTER,
-                        zoom: DEFAULT_ZOOM,
-                    });
-                    viewRef.current = view;
-
-                    // Добавляем слой для графики
-                    const graphicsLayer = new GraphicsLayer();
-                    map.add(graphicsLayer);
-                    graphicsLayerRef.current = graphicsLayer;
-
-                    // Обработчик кликов карты, который только обновляет geoData
-                    clickHandlerRef.current = view.on("click", (event: __esri.ViewClickEvent) => {
-                        const { longitude, latitude } = event.mapPoint;
-
-                        if (drawActionRef.current === DrawActionType.MARKER) {
-                            const marker = new Graphic({
-                                geometry: new Point({ longitude, latitude }),
-                                symbol: new PictureMarkerSymbol({
-                                    url: markerIconUrl || "https://maps.google.com/mapfiles/ms/icons/red-dot.png",
-                                    width: 32,
-                                    height: 32,
-                                }),
-                            });
-                            graphicsLayer.add(marker);
-                        }
-
-                        if (drawActionRef.current === DrawActionType.POLYLINE) {
-                            polylineCoordsRef.current.push([longitude, latitude]);
-
-                            if (polylineCoordsRef.current.length >= 2) {
-                                const polyline = new Polyline({ paths: [polylineCoordsRef.current] });
-                                const lineSymbol = new SimpleLineSymbol({ color: [255, 0, 0], width: 3 });
-
-                                if (!polylineGraphicRef.current) {
-                                    polylineGraphicRef.current = new Graphic({ geometry: polyline, symbol: lineSymbol });
-                                    graphicsLayer.add(polylineGraphicRef.current);
-                                } else {
-                                    polylineGraphicRef.current.geometry = polyline;
-                                }
-                            }
-
-                            const squareGraphic = new Graphic({
-                                geometry: new Point({ longitude, latitude }),
-                                symbol: {
-                                    type: "simple-marker",
-                                    style: "square",
-                                    size: 10,
-                                    color: [255, 255, 255],
-                                    outline: { color: [0, 0, 0], width: 1 },
-                                } as any,
-                            });
-                            graphicsLayer.add(squareGraphic);
-                        }
-                    });
-
-                }
-            );
-        };
-
-        initializeMap().catch(console.error);
-
-        return () => {
-            cancelled = true;
-            clickHandlerRef.current?.remove();
-            clickHandlerRef.current = null;
-            viewRef.current?.destroy();
-            viewRef.current = null;
-            graphicsLayerRef.current = null;
-            polylineGraphicRef.current = null;
-        };
-    }, [providerId]);
-
-    // Эффект для отрисовки всех объектов карты на основе geoData
-    useEffect(() => {
-        const view = viewRef.current;
-        const graphicsLayer = graphicsLayerRef.current;
-        if (!view || !graphicsLayer) return;
-
-        // Очищаем слой перед перерисовкой
-        graphicsLayer.removeAll();
-        polylineGraphicRef.current = null;
-
-        geoData.features.forEach((feature) => {
-            if (feature.geometry.type === "Point") {
-                const marker = new (window as any).__esri.Graphic({
-                    geometry: new (window as any).__esri.Point({
-                        longitude: feature.geometry.coordinates[0],
-                        latitude: feature.geometry.coordinates[1],
-                    }),
-                    symbol: new (window as any).__esri.PictureMarkerSymbol({
-                        url: markerIconUrl || "https://maps.google.com/mapfiles/ms/icons/red-dot.png",
-                        width: 32,
-                        height: 32,
-                    }),
-                });
-                graphicsLayer.add(marker);
-            }
-
-            if (feature.geometry.type === "LineString") {
-                const polyline = new (window as any).__esri.Polyline({
-                    paths: [feature.geometry.coordinates],
-                });
-
-                const lineSymbol = new (window as any).__esri.SimpleLineSymbol({
-                    color: [255, 0, 0],
-                    width: 3,
-                });
-
-                const polylineGraphic = new (window as any).__esri.Graphic({
-                    geometry: polyline,
-                    symbol: lineSymbol,
-                });
-                graphicsLayer.add(polylineGraphic);
-                polylineGraphicRef.current = polylineGraphic;
-
-                // Белые квадратики для контрольных точек
-                (feature.geometry.coordinates as [number, number][]).forEach((coord) => {
-                    const [lng, lat] = coord;
-                    const square = new (window as any).__esri.Graphic({
-                        geometry: new (window as any).__esri.Point({ longitude: lng, latitude: lat }),
-                        symbol: {
-                            type: "simple-marker",
-                            style: "square",
-                            size: 10,
-                            color: [255, 255, 255],
-                            outline: { color: [0, 0, 0], width: 1 },
-                        } as any,
-                    });
-                    graphicsLayer.add(square);
-                });
-            }
+        onUpdateGeoData({
+          type: "FeatureCollection",
+          features: [...(tempGeoData?.features ?? []), newFeature],
         });
-    }, [geoData, markerIconUrl]);
+        return;
+      }
 
-    return <div ref={containerRef} className={styles.arcgisContainer} />;
+      if (action === DrawActionType.POLYLINE) {
+        const cloned: GeoJSON.FeatureCollection =
+          typeof structuredClone === "function"
+            ? structuredClone(tempGeoData ?? { type: "FeatureCollection", features: [] })
+            : JSON.parse(JSON.stringify(tempGeoData ?? { type: "FeatureCollection", features: [] }));
+
+        cloned.features = Array.isArray(cloned.features) ? cloned.features : [];
+
+        const tempLine = cloned.features
+          .slice()
+          .reverse()
+          .find((f) => f.geometry?.type === "LineString" && f.properties?.isTemp);
+
+        if (tempLine && tempLine.geometry.type === "LineString") {
+          (tempLine.geometry.coordinates as [number, number][]).push(coord);
+        } else {
+          cloned.features.push({
+            type: "Feature",
+            geometry: { type: "LineString", coordinates: [coord] },
+            properties: { id: nextIdRef.current++, type: "polyline", isTemp: true },
+          });
+        }
+
+        onUpdateGeoData(cloned);
+      }
+    },
+    [tempGeoData, onUpdateGeoData]
+  );
+
+  // ---- BIND CLICK HANDLER ----
+  useEffect(() => {
+    const view = viewRef.current;
+    if (!view || !mapReady) return;
+
+    const handle = view.on("click", handleMapClick);
+    return () => handle.remove();
+  }, [mapReady, handleMapClick]);
+
+  // ---- RENDER GEO DATA ----
+  useEffect(() => {
+    if (!mapReady) return;
+
+    const graphicsLayer = graphicsLayerRef.current;
+    const { Graphic, Point, Polyline, PictureMarkerSymbol, SimpleLineSymbol } = esriModulesRef.current;
+    if (!graphicsLayer || !Graphic || !Point || !Polyline || !PictureMarkerSymbol || !SimpleLineSymbol) return;
+
+    graphicsLayer.removeAll();
+
+    const allFeatures: GeoJSON.Feature[] = [
+      ...(savedGeoData?.features ?? []),
+      ...(tempGeoData?.features ?? []),
+    ];
+
+    allFeatures.forEach((f) => {
+      if (!f.geometry) return;
+
+      if (f.geometry.type === "Point") {
+        const [lng, lat] = f.geometry.coordinates as [number, number];
+        graphicsLayer.add(
+          new Graphic({
+            geometry: new Point({ longitude: lng, latitude: lat }),
+            symbol: new PictureMarkerSymbol({
+              url: markerIconUrl ?? "https://maps.google.com/mapfiles/ms/icons/red-dot.png",
+              width: 32,
+              height: 32,
+            }),
+          })
+        );
+      }
+
+      if (f.geometry.type === "LineString") {
+        const coords = f.geometry.coordinates as [number, number][];
+        const polyline = new Polyline({ paths: [coords] });
+        graphicsLayer.add(
+          new Graphic({ geometry: polyline, symbol: new SimpleLineSymbol({ color: [255, 0, 0], width: 3 }) })
+        );
+
+        coords.forEach(([lng, lat]) => {
+          graphicsLayer.add(
+            new Graphic({
+              geometry: new Point({ longitude: lng, latitude: lat }),
+              symbol: {
+                type: "simple-marker",
+                style: "square",
+                size: 10,
+                color: [255, 255, 255],
+                outline: { color: [0, 0, 0], width: 1 },
+              } as any,
+            })
+          );
+        });
+      }
+    });
+  }, [tempGeoData, savedGeoData, mapReady, markerIconUrl]);
+
+  return <div ref={containerRef} className={styles.arcgisContainer} />;
 };
 
 export default ArcGISEngine;
