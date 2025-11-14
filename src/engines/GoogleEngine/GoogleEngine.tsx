@@ -2,6 +2,7 @@ import React, { FC, useEffect, useRef, useState } from "react";
 import styles from "./GoogleEngine.module.scss";
 import { DrawActionType } from "../drawActionType";
 import { GeoData, GeoFeature } from "../geoDataType";
+import { normalizeGeoData } from "../../utils/geoDataNormalizer";
 
 declare global {
     interface Window {
@@ -33,13 +34,13 @@ const GoogleEngine: FC<GoogleEngineProps> = ({ providerId, drawActionType, marke
     const containerRef = useRef<HTMLDivElement | null>(null);
     const mapRef = useRef<google.maps.Map | null>(null);
 
-    /** Отдельные маркеры точек */
+    /** Маркеры точек */
     const pointMarkersRef = useRef<Map<string, google.maps.Marker>>(new Map());
 
-    /** Квадратики LineString */
+    /** Квадратики полилинии */
     const polylinePointMarkersRef = useRef<google.maps.Marker[]>([]);
 
-    /** Одна глобальная polyline */
+    /** Глобальная polyline */
     const polylineRef = useRef<google.maps.Polyline | null>(null);
 
     const clickListenerRef = useRef<google.maps.MapsEventListener | null>(null);
@@ -102,22 +103,21 @@ const GoogleEngine: FC<GoogleEngineProps> = ({ providerId, drawActionType, marke
                     setGeoData((prev) => {
                         switch (drawActionRef.current) {
                             case DrawActionType.MARKER: {
-                                const newFeature: GeoFeature = {
-                                    type: "Feature",
-                                    geometry: { type: "Point", coordinates: coords },
-                                    properties: {
-                                        id: String(prev.features.length + 1),
-                                        type: "marker",
-                                    },
-                                };
+                                const newFeature: GeoFeature = normalizeGeoData({
+                                    type: "FeatureCollection",
+                                    features: [{
+                                        type: "Feature",
+                                        geometry: { type: "Point", coordinates: coords },
+                                        properties: { type: "marker", isTemp: false }
+                                    }]
+                                }).features[0];
+
                                 return { ...prev, features: [...prev.features, newFeature] };
                             }
 
                             case DrawActionType.POLYLINE: {
                                 const lastIndex = prev.features.findIndex(
-                                    (f) =>
-                                        f.properties.id === "active-polyline" &&
-                                        f.geometry.type === "LineString"
+                                    (f) => f.properties.id === "active-polyline" && f.geometry.type === "LineString"
                                 );
 
                                 let updated: GeoFeature;
@@ -135,22 +135,19 @@ const GoogleEngine: FC<GoogleEngineProps> = ({ providerId, drawActionType, marke
                                         },
                                     };
                                 } else {
-                                    updated = {
-                                        type: "Feature",
-                                        geometry: {
-                                            type: "LineString",
-                                            coordinates: [coords],
-                                        },
-                                        properties: {
-                                            id: "active-polyline",
-                                            type: "polyline",
-                                        },
-                                    };
+                                    const newLineFeature = normalizeGeoData({
+                                        type: "FeatureCollection",
+                                        features: [{
+                                            type: "Feature",
+                                            geometry: { type: "LineString", coordinates: [coords] },
+                                            properties: { type: "polyline", isTemp: false, id: "active-polyline" }
+                                        }]
+                                    }).features[0];
+
+                                    updated = newLineFeature;
                                 }
 
-                                const other = prev.features.filter(
-                                    (f) => f.properties.id !== "active-polyline"
-                                );
+                                const other = prev.features.filter(f => f.properties.id !== "active-polyline");
                                 return { ...prev, features: [...other, updated] };
                             }
 
