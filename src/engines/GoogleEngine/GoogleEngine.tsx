@@ -37,13 +37,11 @@ const GoogleEngine: FC<GoogleEngineProps> = ({ providerId, drawActionType, marke
     const pointMarkersRef = useRef<Map<string, google.maps.Marker>>(new Map());
     const polylinePointMarkersRef = useRef<google.maps.Marker[]>([]);
     const polylineRef = useRef<google.maps.Polyline | null>(null);
-
     const clickListenerRef = useRef<google.maps.MapsEventListener | null>(null);
     const styleTagRef = useRef<HTMLStyleElement | null>(null);
     const containerIdRef = useRef<string | null>(null);
 
     const drawActionRef = useRef(drawActionType);
-
     const [geoData, setGeoData] = useState<GeoData | undefined>();
 
     useEffect(() => {
@@ -67,87 +65,15 @@ const GoogleEngine: FC<GoogleEngineProps> = ({ providerId, drawActionType, marke
                 const google = await loadGoogleMaps(apiKey);
                 if (cancelled || !containerRef.current) return;
 
-                const map = new google.maps.Map(containerRef.current, {
+                mapRef.current = new google.maps.Map(containerRef.current, {
                     center: { lat: 55.7558, lng: 37.6173 },
                     zoom: 10,
                     mapTypeId: providerId === "GoogleSatellite" ? "satellite" : "roadmap",
                     disableDefaultUI: true,
                 });
-                mapRef.current = map;
 
-                if (!polylineRef.current) {
-                    polylineRef.current = new google.maps.Polyline({
-                        path: [],
-                        geodesic: true,
-                        strokeColor: "#FF0000",
-                        strokeOpacity: 1.0,
-                        strokeWeight: 3,
-                        map,
-                    });
-                }
-
-                clickListenerRef.current = map.addListener("click", (event: google.maps.MapMouseEvent) => {
-                    if (!event.latLng) return;
-                    const coords: [number, number] = [event.latLng.lng(), event.latLng.lat()];
-
-                    setGeoData((prev) => {
-                        const current = prev ?? { type: "FeatureCollection", features: [] };
-
-                        switch (drawActionRef.current) {
-                            case DrawActionType.MARKER: {
-                                const newFeature: GeoFeature = normalizeGeoData({
-                                    type: "FeatureCollection",
-                                    features: [{
-                                        type: "Feature",
-                                        geometry: { type: "Point", coordinates: coords },
-                                        properties: { type: "marker", isTemp: false, id: `marker-${Date.now()}` },
-                                    }]
-                                }).features[0];
-
-                                return { ...current, features: [...current.features, newFeature] };
-                            }
-
-                            case DrawActionType.POLYLINE: {
-                                const lastIndex = current.features.findIndex(
-                                    (f) => f.properties.id === "active-polyline" && f.geometry.type === "LineString"
-                                );
-
-                                let updated: GeoFeature;
-
-                                if (lastIndex !== -1) {
-                                    const existing = current.features[lastIndex];
-                                    updated = {
-                                        ...existing,
-                                        geometry: {
-                                            type: "LineString",
-                                            coordinates: [
-                                                ...(existing.geometry as GeoJSON.LineString).coordinates,
-                                                coords,
-                                            ],
-                                        },
-                                    };
-                                } else {
-                                    const newLineFeature = normalizeGeoData({
-                                        type: "FeatureCollection",
-                                        features: [{
-                                            type: "Feature",
-                                            geometry: { type: "LineString", coordinates: [coords] },
-                                            properties: { type: "polyline", isTemp: false, id: "active-polyline" }
-                                        }]
-                                    }).features[0];
-
-                                    updated = newLineFeature;
-                                }
-
-                                const other = current.features.filter(f => f.properties.id !== "active-polyline");
-                                return { ...current, features: [...other, updated] };
-                            }
-
-                            default:
-                                return current;
-                        }
-                    });
-                });
+                initPolyline();
+                attachClickListener();
             } catch (error) {
                 console.error("Google Maps initialization failed:", error);
             }
@@ -156,33 +82,122 @@ const GoogleEngine: FC<GoogleEngineProps> = ({ providerId, drawActionType, marke
         initializeMap();
 
         return () => {
+            cleanupMap();
             cancelled = true;
-
-            clickListenerRef.current?.remove();
-            clickListenerRef.current = null;
-
-            pointMarkersRef.current.forEach((m) => m.setMap(null));
-            pointMarkersRef.current.clear();
-
-            polylinePointMarkersRef.current.forEach((m) => m.setMap(null));
-            polylinePointMarkersRef.current = [];
-
-            polylineRef.current?.setMap(null);
-            polylineRef.current = null;
-
-            if (styleTagRef.current?.parentNode) {
-                styleTagRef.current.parentNode.removeChild(styleTagRef.current);
-            }
         };
     }, [providerId]);
 
-    /** Рендер маркеров и полилиний */
+    /** =========================
+     * Методы работы с картой
+     * ========================= */
+
+    const initPolyline = () => {
+        if (!polylineRef.current && mapRef.current) {
+            polylineRef.current = new google.maps.Polyline({
+                path: [],
+                geodesic: true,
+                strokeColor: "#FF0000",
+                strokeOpacity: 1.0,
+                strokeWeight: 3,
+                map: mapRef.current,
+            });
+        }
+    };
+
+    const attachClickListener = () => {
+        if (!mapRef.current) return;
+
+        clickListenerRef.current = mapRef.current.addListener("click", (event: google.maps.MapMouseEvent) => {
+            if (!event.latLng) return;
+            const coords: [number, number] = [event.latLng.lng(), event.latLng.lat()];
+
+            setGeoData(prev => updateGeoData(prev, coords));
+        });
+    };
+
+    const updateGeoData = (prev: GeoData | undefined, coords: [number, number]): GeoData => {
+        const current = prev ?? { type: "FeatureCollection", features: [] };
+
+        switch (drawActionRef.current) {
+            case DrawActionType.MARKER: {
+                const newFeature: GeoFeature = normalizeGeoData({
+                    type: "FeatureCollection",
+                    features: [{
+                        type: "Feature",
+                        geometry: { type: "Point", coordinates: coords },
+                        properties: { type: "marker", isTemp: false, id: `marker-${Date.now()}` },
+                    }]
+                }).features[0];
+                return { ...current, features: [...current.features, newFeature] };
+            }
+
+            case DrawActionType.POLYLINE: {
+                const lastIndex = current.features.findIndex(
+                    f => f.properties.id === "active-polyline" && f.geometry.type === "LineString"
+                );
+
+                let updated: GeoFeature;
+                if (lastIndex !== -1) {
+                    const existing = current.features[lastIndex];
+                    updated = {
+                        ...existing,
+                        geometry: {
+                            type: "LineString",
+                            coordinates: [...(existing.geometry as GeoJSON.LineString).coordinates, coords],
+                        },
+                    };
+                } else {
+                    const newLineFeature = normalizeGeoData({
+                        type: "FeatureCollection",
+                        features: [{
+                            type: "Feature",
+                            geometry: { type: "LineString", coordinates: [coords] },
+                            properties: { type: "polyline", isTemp: false, id: "active-polyline" }
+                        }]
+                    }).features[0];
+                    updated = newLineFeature;
+                }
+
+                const other = current.features.filter(f => f.properties.id !== "active-polyline");
+                return { ...current, features: [...other, updated] };
+            }
+
+            default:
+                return current;
+        }
+    };
+
+    const cleanupMap = () => {
+        clickListenerRef.current?.remove();
+        clickListenerRef.current = null;
+
+        pointMarkersRef.current.forEach(m => m.setMap(null));
+        pointMarkersRef.current.clear();
+
+        polylinePointMarkersRef.current.forEach(m => m.setMap(null));
+        polylinePointMarkersRef.current = [];
+
+        polylineRef.current?.setMap(null);
+        polylineRef.current = null;
+
+        if (styleTagRef.current?.parentNode) {
+            styleTagRef.current.parentNode.removeChild(styleTagRef.current);
+        }
+    };
+
+    /** =========================
+     * Рендер маркеров и полилиний
+     * ========================= */
     useEffect(() => {
+        renderMarkersAndPolyline();
+    }, [geoData, markerIconUrl]);
+
+    const renderMarkersAndPolyline = () => {
         const map = mapRef.current;
         if (!map || !geoData) return;
 
         // Маркеры точек
-        const markerFeatures = geoData.features.filter((f) => f.properties.type === "marker");
+        const markerFeatures = geoData.features.filter(f => f.properties.type === "marker");
         for (const feature of markerFeatures) {
             if (feature.geometry.type !== "Point") continue;
             const id = feature.properties.id;
@@ -198,7 +213,7 @@ const GoogleEngine: FC<GoogleEngineProps> = ({ providerId, drawActionType, marke
         }
 
         // Полилиния
-        const polyFeature = geoData.features.find((f) => f.properties.type === "polyline");
+        const polyFeature = geoData.features.find(f => f.properties.type === "polyline");
         if (polyFeature?.geometry.type === "LineString") {
             const coords = polyFeature.geometry.coordinates as [number, number][];
             const path = coords.map(([lng, lat]) => new google.maps.LatLng(lat, lng));
@@ -225,10 +240,16 @@ const GoogleEngine: FC<GoogleEngineProps> = ({ providerId, drawActionType, marke
                 polylinePointMarkersRef.current.push(squareMarker);
             }
         }
-    }, [geoData, markerIconUrl]);
+    };
 
-    /** Курсор */
+    /** =========================
+     * Курсор
+     * ========================= */
     useEffect(() => {
+        updateCursor();
+    }, [drawActionType]);
+
+    const updateCursor = () => {
         const containerId = containerIdRef.current;
         if (!containerId) return;
 
@@ -241,14 +262,13 @@ const GoogleEngine: FC<GoogleEngineProps> = ({ providerId, drawActionType, marke
         }
 
         const cursor = drawActionRef.current ? "crosshair" : "grab";
-
         styleTag.innerHTML = `
             #${containerId} .gm-style,
             #${containerId} .gm-style * {
                 cursor: ${cursor} !important;
             }
         `;
-    }, [drawActionType]);
+    };
 
     return <div ref={containerRef} className={styles.googleContainer} />;
 };
