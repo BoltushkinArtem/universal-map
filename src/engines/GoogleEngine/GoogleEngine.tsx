@@ -1,4 +1,4 @@
-// ---- GoogleEngine.tsx (fixed with per-line polylines) ----
+// ---- GoogleEngine.tsx (persistent all lines + vertex markers, fixed) ----
 import React, { FC, useCallback, useEffect, useRef } from "react";
 import styles from "./GoogleEngine.module.scss";
 import { DrawActionType } from "../drawActionType";
@@ -22,7 +22,6 @@ interface GoogleEngineProps {
 
 async function loadGoogleMaps(apiKey: string): Promise<typeof google> {
     if (window.google?.maps) return window.google;
-
     return new Promise<typeof google>((resolve, reject) => {
         const script = document.createElement("script");
         script.src = `https://maps.googleapis.com/maps/api/js?key=${apiKey}&v=weekly&libraries=geometry,places`;
@@ -40,25 +39,25 @@ const GoogleEngine: FC<GoogleEngineProps> = ({
     markerIconUrl,
     tempGeoData,
     savedGeoData,
-    onUpdateGeoData
+    onUpdateGeoData,
 }) => {
     const containerRef = useRef<HTMLDivElement | null>(null);
     const mapRef = useRef<google.maps.Map | null>(null);
 
     const pointMarkersRef = useRef<Map<string, google.maps.Marker>>(new Map());
-    const polylinePointMarkersRef = useRef<google.maps.Marker[]>([]);
-    const polylinesRef = useRef<google.maps.Polyline[]>([]);
+    const polylinesRef = useRef<Map<string, google.maps.Polyline>>(new Map());
+    const polylineVertexMarkersRef = useRef<Map<string, google.maps.Marker[]>>(new Map());
+
     const clickListenerRef = useRef<google.maps.MapsEventListener | null>(null);
+    const drawActionRef = useRef(drawActionType);
+    const tempGeoDataRef = useRef(tempGeoData);
 
     const styleTagRef = useRef<HTMLStyleElement | null>(null);
     const containerIdRef = useRef<string | null>(null);
 
-    const drawActionRef = useRef(drawActionType);
-    const tempGeoDataRef = useRef(tempGeoData);
-
+    // --- Update refs ---
     useEffect(() => {
         drawActionRef.current = drawActionType;
-
         updateCursor();
     }, [drawActionType]);
 
@@ -66,6 +65,7 @@ const GoogleEngine: FC<GoogleEngineProps> = ({
         tempGeoDataRef.current = tempGeoData;
     }, [tempGeoData]);
 
+    // --- Initialize map ---
     useEffect(() => {
         const apiKey = (import.meta.env as any).VITE_GOOGLE_API_KEY;
         if (!apiKey || !containerRef.current) return;
@@ -86,7 +86,7 @@ const GoogleEngine: FC<GoogleEngineProps> = ({
                     center: { lat: 55.75, lng: 37.61 },
                     zoom: 10,
                     mapTypeId: providerId === "GoogleSatellite" ? "satellite" : "roadmap",
-                    disableDefaultUI: true
+                    disableDefaultUI: true,
                 });
 
                 clickListenerRef.current = mapRef.current.addListener("click", handleMapClick);
@@ -96,6 +96,7 @@ const GoogleEngine: FC<GoogleEngineProps> = ({
         };
 
         init();
+
         return () => {
             cancelled = true;
             cleanupMap();
@@ -118,49 +119,47 @@ const GoogleEngine: FC<GoogleEngineProps> = ({
             case DrawActionType.MARKER: {
                 const feature = normalizeGeoData({
                     type: "FeatureCollection",
-                    features: [{
-                        type: "Feature",
-                        geometry: { type: "Point", coordinates: coords },
-                        properties: { type: "marker", id: `marker-${Date.now()}`, isTemp: false }
-                    }]
+                    features: [
+                        {
+                            type: "Feature",
+                            geometry: { type: "Point", coordinates: coords },
+                            properties: { type: "marker", id: `marker-${Date.now()}`, isTemp: false },
+                        },
+                    ],
                 }).features[0];
-
                 return { ...current, features: [...current.features, feature] };
             }
 
             case DrawActionType.POLYLINE: {
-                const index = current.features.findIndex(
-                    f => f.properties.id === "active-polyline" && f.geometry.type === "LineString"
-                );
+                // ищем последнюю временную линию
+                const activeLine = current.features
+                    .filter(f => f.properties.type === "polyline" && f.properties.isTemp)
+                    .slice(-1)[0];
 
                 let updated: GeoFeature;
-                if (index !== -1) {
-                    const ex = current.features[index];
+                if (activeLine) {
                     updated = {
-                        ...ex,
+                        ...activeLine,
                         geometry: {
                             type: "LineString",
-                            coordinates: [...(ex.geometry as any).coordinates, coords]
-                        }
+                            coordinates: [...(activeLine.geometry as any).coordinates, coords],
+                        },
                     };
                 } else {
+                    const newId = `polyline-${Date.now()}-${Math.random().toString(36).slice(2)}`;
                     updated = normalizeGeoData({
                         type: "FeatureCollection",
-                        features: [{
-                            type: "Feature",
-                            geometry: { type: "LineString", coordinates: [coords] },
-                            properties: { type: "polyline", id: "active-polyline", isTemp: true }
-                        }]
+                        features: [
+                            {
+                                type: "Feature",
+                                geometry: { type: "LineString", coordinates: [coords] },
+                                properties: { type: "polyline", id: newId, isTemp: true },
+                            },
+                        ],
                     }).features[0];
                 }
 
-                return {
-                    ...current,
-                    features: [
-                        ...current.features.filter(f => f.properties.id !== "active-polyline"),
-                        updated
-                    ]
-                };
+                return { ...current, features: [...current.features, updated] };
             }
 
             default:
@@ -172,96 +171,112 @@ const GoogleEngine: FC<GoogleEngineProps> = ({
         clickListenerRef.current?.remove();
         clickListenerRef.current = null;
 
-        pointMarkersRef.current.forEach(m => m.setMap(null));
+        pointMarkersRef.current.forEach((m) => m.setMap(null));
         pointMarkersRef.current.clear();
 
-        polylinePointMarkersRef.current.forEach(m => m.setMap(null));
-        polylinePointMarkersRef.current = [];
+        polylinesRef.current.forEach((l) => l.setMap(null));
+        polylinesRef.current.clear();
 
-        polylinesRef.current.forEach(l => l.setMap(null));
-        polylinesRef.current = [];
+        polylineVertexMarkersRef.current.forEach((arr) => arr.forEach((m) => m.setMap(null)));
+        polylineVertexMarkersRef.current.clear();
 
-        if (styleTagRef.current?.parentNode) {
-            styleTagRef.current.parentNode.removeChild(styleTagRef.current);
-        }
+        if (styleTagRef.current?.parentNode) styleTagRef.current.parentNode.removeChild(styleTagRef.current);
     };
 
+    // --- Render all features ---
     useEffect(() => {
-        renderMarkersAndPolylines();
+        renderAllFeatures();
     }, [savedGeoData, tempGeoData, markerIconUrl]);
 
-    const renderMarkersAndPolylines = () => {
+    const renderAllFeatures = () => {
         const map = mapRef.current;
         if (!map) return;
 
-        const finalGeo = normalizeGeoData({
+        const allGeo = normalizeGeoData({
             type: "FeatureCollection",
-            features: [
-                ...(savedGeoData?.features ?? []),
-                ...(tempGeoData?.features ?? [])
-            ]
+            features: [...(savedGeoData?.features ?? []), ...(tempGeoData?.features ?? [])],
         });
 
-        pointMarkersRef.current.forEach(m => m.setMap(null));
-        pointMarkersRef.current.clear();
-        polylinePointMarkersRef.current.forEach(m => m.setMap(null));
-        polylinePointMarkersRef.current = [];
-        polylinesRef.current.forEach(l => l.setMap(null));
-        polylinesRef.current = [];
+        // --- POINT MARKERS ---
+        const points = allGeo.features.filter((f) => f.properties.type === "marker");
+        const pointIds = new Set(points.map((f) => f.properties.id));
+        pointMarkersRef.current.forEach((m, id) => {
+            if (!pointIds.has(id)) {
+                m.setMap(null);
+                pointMarkersRef.current.delete(id);
+            }
+        });
+        points.forEach((f) => {
+            const id = f.properties.id;
+            if (!pointMarkersRef.current.has(id)) {
+                const [lng, lat] = f.geometry.coordinates as [number, number];
+                const m = new google.maps.Marker({
+                    position: new google.maps.LatLng(lat, lng),
+                    map,
+                    icon: markerIconUrl
+                        ? { url: markerIconUrl, scaledSize: new google.maps.Size(32, 32) }
+                        : undefined,
+                });
+                pointMarkersRef.current.set(id, m);
+            }
+        });
 
-        const markers = finalGeo.features.filter(f => f.properties.type === "marker");
-        for (const feature of markers) {
-            const [lng, lat] = feature.geometry.coordinates as [number, number];
-            const id = feature.properties.id;
+        // --- POLYLINES + VERTEX MARKERS ---
+        const lines = allGeo.features.filter(
+            (f) => f.properties.type === "polyline" && f.geometry.type === "LineString"
+        );
+        const lineIds = new Set(lines.map((f) => f.properties.id));
 
-            const m = new google.maps.Marker({
-                position: new google.maps.LatLng(lat, lng),
-                map,
-                icon: markerIconUrl
-                    ? { url: markerIconUrl, scaledSize: new google.maps.Size(32, 32) }
-                    : undefined
-            });
+        // Remove deleted lines
+        Array.from(polylinesRef.current.keys()).forEach((id) => {
+            if (!lineIds.has(id)) {
+                polylinesRef.current.get(id)?.setMap(null);
+                polylinesRef.current.delete(id);
+                polylineVertexMarkersRef.current.get(id)?.forEach((m) => m.setMap(null));
+                polylineVertexMarkersRef.current.delete(id);
+            }
+        });
 
-            pointMarkersRef.current.set(id, m);
-        }
-
-        const lines = finalGeo.features.filter(f => f.properties.type === "polyline");
-
-        for (const line of lines) {
-            if (line.geometry.type !== "LineString") continue;
-
+        lines.forEach((line) => {
+            const id = line.properties.id;
             const coords = line.geometry.coordinates as [number, number][];
-            const path = coords.map(([lng, lat]) => new google.maps.LatLng(lat, lng));
 
-            const polyline = new google.maps.Polyline({
-                map,
-                path,
-                strokeColor: "#FF0000",
-                strokeOpacity: 1,
-                strokeWeight: 3
-            });
+            let polyline = polylinesRef.current.get(id);
+            if (!polyline) {
+                polyline = new google.maps.Polyline({
+                    map,
+                    path: coords.map(([lng, lat]) => new google.maps.LatLng(lat, lng)),
+                    strokeColor: "#FF0000",
+                    strokeOpacity: 1,
+                    strokeWeight: 3,
+                });
+                polylinesRef.current.set(id, polyline);
+            } else {
+                polyline.setPath(coords.map(([lng, lat]) => new google.maps.LatLng(lat, lng)));
+            }
 
-            polylinesRef.current.push(polyline);
-
-            for (const [lng, lat] of coords) {
-                const marker = new google.maps.Marker({
+            // Vertex markers
+            let markers = polylineVertexMarkersRef.current.get(id) || [];
+            for (let i = markers.length; i < coords.length; i++) {
+                const [lng, lat] = coords[i];
+                const m = new google.maps.Marker({
                     position: new google.maps.LatLng(lat, lng),
                     map,
                     icon: {
                         url:
                             "data:image/svg+xml;charset=UTF-8," +
                             encodeURIComponent(`
-                        <svg width="10" height="10" xmlns="http://www.w3.org/2000/svg">
-                            <rect width="10" height="10" fill="white" stroke="black" stroke-width="1"/>
-                        </svg>`),
-                        scaledSize: new google.maps.Size(10, 10)
+                <svg width="10" height="10" xmlns="http://www.w3.org/2000/svg">
+                  <rect width="10" height="10" fill="white" stroke="black" stroke-width="1"/>
+                </svg>`),
+                        scaledSize: new google.maps.Size(10, 10),
                     },
-                    clickable: false
+                    clickable: false,
                 });
-
-                polylinePointMarkersRef.current.push(marker);
+                markers.push(m);
             }
-        }
+            polylineVertexMarkersRef.current.set(id, markers);
+        });
     };
 
     const updateCursor = () => {
@@ -276,11 +291,11 @@ const GoogleEngine: FC<GoogleEngineProps> = ({
         }
 
         style.innerHTML = `
-          #${containerId} .gm-style, 
-          #${containerId} .gm-style * {
-            cursor: ${drawActionRef.current ? "crosshair" : "grab"} !important;
-          }
-        `;
+      #${containerId} .gm-style, 
+      #${containerId} .gm-style * {
+        cursor: ${drawActionRef.current ? "crosshair" : "grab"} !important;
+      }
+    `;
     };
 
     return <div ref={containerRef} className={styles.googleContainer} />;
