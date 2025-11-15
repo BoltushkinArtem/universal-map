@@ -1,4 +1,4 @@
-// ---- GoogleEngine.tsx (persistent all lines + vertex markers, fixed) ----
+// ---- GoogleEngine.tsx (persistent all lines + vertex markers, fixed + wait map load) ----
 import React, { FC, useCallback, useEffect, useRef } from "react";
 import styles from "./GoogleEngine.module.scss";
 import { DrawActionType } from "../drawActionType";
@@ -87,6 +87,11 @@ const GoogleEngine: FC<GoogleEngineProps> = ({
                     zoom: 10,
                     mapTypeId: providerId === "GoogleSatellite" ? "satellite" : "roadmap",
                     disableDefaultUI: true,
+                });
+
+                // --- Отрисовка после полной загрузки карты ---
+                google.maps.event.addListenerOnce(mapRef.current, "idle", () => {
+                    renderAllFeatures();
                 });
 
                 clickListenerRef.current = mapRef.current.addListener("click", handleMapClick);
@@ -183,8 +188,9 @@ const GoogleEngine: FC<GoogleEngineProps> = ({
         if (styleTagRef.current?.parentNode) styleTagRef.current.parentNode.removeChild(styleTagRef.current);
     };
 
-    // --- Render all features ---
+    // --- Render all features при обновлении saved/temp данных ---
     useEffect(() => {
+        if (!mapRef.current) return;
         renderAllFeatures();
     }, [savedGeoData, tempGeoData, markerIconUrl]);
 
@@ -227,7 +233,6 @@ const GoogleEngine: FC<GoogleEngineProps> = ({
         );
         const lineIds = new Set(lines.map((f) => f.properties.id));
 
-        // Remove deleted lines
         Array.from(polylinesRef.current.keys()).forEach((id) => {
             if (!lineIds.has(id)) {
                 polylinesRef.current.get(id)?.setMap(null);
@@ -246,7 +251,7 @@ const GoogleEngine: FC<GoogleEngineProps> = ({
                 polyline = new google.maps.Polyline({
                     map,
                     path: coords.map(([lng, lat]) => new google.maps.LatLng(lat, lng)),
-                    strokeColor: "#FF0000",
+                    strokeColor: line.properties.isTemp ? "#0000FF" : "#FF0000",
                     strokeOpacity: 1,
                     strokeWeight: 3,
                 });
