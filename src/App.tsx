@@ -1,4 +1,4 @@
-import { FC, useState, useEffect } from "react";
+import { FC, useState, useEffect, useRef, useCallback } from "react";
 import ProviderSelector from "./components/ProviderSelector";
 import MapEngineWrapper from "./components/MapEngineWrapper";
 import GeoEditorPanel from "./components/GeoEditorPanel";
@@ -11,6 +11,8 @@ const App: FC = () => {
     const [provider, setProvider] = useState("MapLibre_OSM");
     const [drawActionType, setDrawActionType] = useState<DrawActionType>();
 
+    const drawActionRef = useRef<DrawActionType | undefined>(drawActionType);
+
     const [tempGeoData, setTempGeoData] = useState<GeoData>({
         type: "FeatureCollection",
         features: [],
@@ -21,29 +23,33 @@ const App: FC = () => {
         features: [],
     });
 
+    // Обновляем ref при смене drawActionType
+    useEffect(() => {
+        drawActionRef.current = drawActionType;
+    }, [drawActionType]);
+
     /**
      * Основной обработчик обновлений геоданных.
      * - При любом изменении данных обновляем состояние tempGeoData.
      * - Если в режиме DrawActionType.MARKER добавлена новая точка — сразу выполняем Finish.
      */
-    const handleUpdateGeoData = (data: GeoData) => {
-        // Считаем количество точек до и после обновления
+    const handleUpdateGeoData = useCallback((data: GeoData) => {
         const prevPoints = tempGeoData.features.filter(f => f.geometry.type === "Point").length;
         const newPoints = data.features.filter(f => f.geometry.type === "Point").length;
 
         setTempGeoData(data);
 
-        // Если мы в режиме "Marker" и добавлена новая точка — сразу завершаем редактирование
-        if (drawActionType === DrawActionType.MARKER && newPoints > prevPoints) {
+        // Используем актуальное значение из ref
+        if (drawActionRef.current === DrawActionType.MARKER && newPoints > prevPoints) {
             handleFinishEditing(data);
         }
-    };
+    }, [tempGeoData]);
 
     /**
      * Завершает текущее редактирование:
      * переносит все временные фичи в сохранённые и очищает временные данные.
      */
-    const handleFinishEditing = (dataOverride?: GeoData) => {
+    const handleFinishEditing = useCallback((dataOverride?: GeoData) => {
         const sourceData = dataOverride ?? tempGeoData;
 
         if (sourceData.features.length > 0) {
@@ -61,20 +67,20 @@ const App: FC = () => {
             setTempGeoData({ type: "FeatureCollection", features: [] });
             setDrawActionType(undefined);
         }
-    };
+    }, [tempGeoData]);
 
     /**
      * Отмена текущего рисования — очищает временные данные и сбрасывает режим.
      */
-    const handleCancelEditing = () => {
+    const handleCancelEditing = useCallback(() => {
         setTempGeoData({ type: "FeatureCollection", features: [] });
         setDrawActionType(undefined);
-    };
+    }, []);
 
     /**
      * Удаление последней точки активной линии.
      */
-    const handleDeleteLastPoint = () => {
+    const handleDeleteLastPoint = useCallback(() => {
         const updated = structuredClone(tempGeoData);
         const lastLine = [...updated.features]
             .reverse()
@@ -87,11 +93,11 @@ const App: FC = () => {
             }
             setTempGeoData(updated);
         }
-    };
+    }, [tempGeoData]);
 
     useEffect(() => {
-        handleCancelEditing()
-    }, [provider])
+        handleCancelEditing();
+    }, [provider, handleCancelEditing]);
 
     return (
         <>
