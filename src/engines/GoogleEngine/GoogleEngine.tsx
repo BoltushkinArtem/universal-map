@@ -251,7 +251,7 @@ const GoogleEngine: FC<GoogleEngineProps> = ({
                 polyline = new google.maps.Polyline({
                     map,
                     path: coords.map(([lng, lat]) => new google.maps.LatLng(lat, lng)),
-                    strokeColor: line.properties.isTemp ? "#0000FF" : "#FF0000",
+                    strokeColor: "#FF0000",
                     strokeOpacity: 1,
                     strokeWeight: 3,
                 });
