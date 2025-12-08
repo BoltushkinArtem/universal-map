@@ -6,6 +6,7 @@ import styles from "./MapLibreEngine.module.scss";
 import { DrawActionType } from "../drawActionType";
 import { GeoData, GeoFeature } from "../geoDataType";
 import { normalizeGeoData } from "../../utils/geoDataNormalizer";
+import { updateGeoData } from "../../utils/updateGeoData";
 
 interface MapLibreEngineProps {
     providerId: string;
@@ -115,43 +116,8 @@ const MapLibreEngine: FC<MapLibreEngineProps> = ({
 
             const coords: [number, number] = [event.lngLat.lng, event.lngLat.lat];
 
-            const normalizedTempData = normalizeGeoData(tempGeoData);
-            const cloned: GeoData =
-                typeof structuredClone === "function"
-                    ? structuredClone(normalizedTempData)
-                    : JSON.parse(JSON.stringify(normalizedTempData));
-
-            cloned.features = Array.isArray(cloned.features) ? cloned.features : [];
-
-            if (action === DrawActionType.MARKER) {
-                const id = `marker-${nextIdRef.current++}`;
-                cloned.features.push({
-                    type: "Feature",
-                    geometry: { type: "Point", coordinates: coords },
-                    properties: { id, type: "marker", isTemp: false },
-                });
-                onUpdateGeoData(cloned);
-                return;
-            }
-
-            if (action === DrawActionType.POLYLINE) {
-                const tempLine = cloned.features
-                    .slice()
-                    .reverse()
-                    .find(f => isLineFeature(f) && f.properties?.isTemp);
-
-                if (tempLine) {
-                    (tempLine.geometry.coordinates as [number, number][]).push(coords);
-                } else {
-                    cloned.features.push({
-                        type: "Feature",
-                        geometry: { type: "LineString", coordinates: [coords] },
-                        properties: { id: `polyline-${nextIdRef.current++}`, type: "polyline", isTemp: true },
-                    });
-                }
-
-                onUpdateGeoData(cloned);
-            }
+            const updated = updateGeoData(normalizeGeoData(tempGeoData), coords, action);
+            onUpdateGeoData(updated);
         },
         [tempGeoData, onUpdateGeoData]
     );

@@ -3,6 +3,7 @@ import styles from "./ArcGISEngine.module.scss";
 import { DrawActionType } from "../drawActionType";
 import { GeoData, GeoFeature } from "../geoDataType";
 import { normalizeGeoData } from "../../utils/geoDataNormalizer";
+import { updateGeoData } from "../../utils/updateGeoData";
 
 interface ArcGISEngineProps {
   providerId: string;
@@ -136,43 +137,8 @@ const ArcGISEngine: FC<ArcGISEngineProps> = ({
       const { longitude, latitude } = event.mapPoint;
       const coord: [number, number] = [longitude, latitude];
 
-      const normalizedTempData = normalizeGeoData(tempGeoData);
-      const cloned: GeoData =
-        typeof structuredClone === "function"
-          ? structuredClone(normalizedTempData)
-          : JSON.parse(JSON.stringify(normalizedTempData));
-
-      cloned.features = Array.isArray(cloned.features) ? cloned.features : [];
-
-      if (action === DrawActionType.MARKER) {
-        const id = `marker-${nextIdRef.current++}`;
-        cloned.features.push({
-          type: "Feature",
-          geometry: { type: "Point", coordinates: coord },
-          properties: { id, type: "marker", isTemp: false },
-        });
-        onUpdateGeoData(cloned);
-        return;
-      }
-
-      if (action === DrawActionType.POLYLINE) {
-        const tempLine = cloned.features
-          .slice()
-          .reverse()
-          .find((f) => f.geometry?.type === "LineString" && f.properties?.isTemp);
-
-        if (tempLine && tempLine.geometry.type === "LineString") {
-          (tempLine.geometry.coordinates as [number, number][]).push(coord);
-        } else {
-          cloned.features.push({
-            type: "Feature",
-            geometry: { type: "LineString", coordinates: [coord] },
-            properties: { id: `polyline-${nextIdRef.current++}`, type: "polyline", isTemp: true },
-          });
-        }
-
-        onUpdateGeoData(cloned);
-      }
+      const updated = updateGeoData(normalizeGeoData(tempGeoData), coord, action);
+      onUpdateGeoData(updated);
     },
     [tempGeoData, onUpdateGeoData]
   );

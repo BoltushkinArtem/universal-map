@@ -1,9 +1,9 @@
-// ---- GoogleEngine.tsx (persistent all lines + vertex markers, fixed + wait map load) ----
 import React, { FC, useCallback, useEffect, useRef } from "react";
 import styles from "./GoogleEngine.module.scss";
 import { DrawActionType } from "../drawActionType";
 import { GeoData, GeoFeature } from "../geoDataType";
 import { normalizeGeoData } from "../../utils/geoDataNormalizer";
+import { updateGeoData } from "../../utils/updateGeoData";
 
 declare global {
     interface Window {
@@ -112,65 +112,11 @@ const GoogleEngine: FC<GoogleEngineProps> = ({
         (event: google.maps.MapMouseEvent) => {
             if (!event.latLng) return;
             const coords: [number, number] = [event.latLng.lng(), event.latLng.lat()];
-            onUpdateGeoData(updateGeoData(tempGeoDataRef.current, coords));
+            const updated = updateGeoData(normalizeGeoData(tempGeoDataRef.current), coords, drawActionRef.current as DrawActionType);
+            onUpdateGeoData(updated);
         },
         [onUpdateGeoData]
     );
-
-    const updateGeoData = (prev: GeoData | undefined, coords: [number, number]): GeoData => {
-        const current = prev ?? { type: "FeatureCollection", features: [] };
-
-        switch (drawActionRef.current) {
-            case DrawActionType.MARKER: {
-                const feature = normalizeGeoData({
-                    type: "FeatureCollection",
-                    features: [
-                        {
-                            type: "Feature",
-                            geometry: { type: "Point", coordinates: coords },
-                            properties: { type: "marker", id: `marker-${Date.now()}`, isTemp: false },
-                        },
-                    ],
-                }).features[0];
-                return { ...current, features: [...current.features, feature] };
-            }
-
-            case DrawActionType.POLYLINE: {
-                // ищем последнюю временную линию
-                const activeLine = current.features
-                    .filter(f => f.properties.type === "polyline" && f.properties.isTemp)
-                    .slice(-1)[0];
-
-                let updated: GeoFeature;
-                if (activeLine) {
-                    updated = {
-                        ...activeLine,
-                        geometry: {
-                            type: "LineString",
-                            coordinates: [...(activeLine.geometry as any).coordinates, coords],
-                        },
-                    };
-                } else {
-                    const newId = `polyline-${Date.now()}-${Math.random().toString(36).slice(2)}`;
-                    updated = normalizeGeoData({
-                        type: "FeatureCollection",
-                        features: [
-                            {
-                                type: "Feature",
-                                geometry: { type: "LineString", coordinates: [coords] },
-                                properties: { type: "polyline", id: newId, isTemp: true },
-                            },
-                        ],
-                    }).features[0];
-                }
-
-                return { ...current, features: [...current.features, updated] };
-            }
-
-            default:
-                return current;
-        }
-    };
 
     const cleanupMap = () => {
         clickListenerRef.current?.remove();
@@ -296,7 +242,7 @@ const GoogleEngine: FC<GoogleEngineProps> = ({
         }
 
         style.innerHTML = `
-      #${containerId} .gm-style, 
+      #${containerId} .gm-style,
       #${containerId} .gm-style * {
         cursor: ${drawActionRef.current ? "crosshair" : "grab"} !important;
       }
