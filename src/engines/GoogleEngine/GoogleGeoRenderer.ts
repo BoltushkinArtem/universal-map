@@ -1,0 +1,106 @@
+import { useEffect } from "react";
+import { GeoData } from "../geoDataType";
+import { normalizeGeoData } from "../../utils/geoDataNormalizer";
+
+interface GoogleGeoRendererProps {
+  map: google.maps.Map | null;
+  tempGeoData: GeoData;
+  savedGeoData: GeoData;
+  markerIconUrl?: string;
+
+  pointMarkersRef: React.MutableRefObject<Map<string, google.maps.Marker>>;
+  polylinesRef: React.MutableRefObject<Map<string, google.maps.Polyline>>;
+  polylineVertexMarkersRef: React.MutableRefObject<Map<string, google.maps.Marker[]>>;
+}
+
+const VERTEX_ICON = (size = 10) => ({
+  url:
+    "data:image/svg+xml;charset=UTF-8," +
+    encodeURIComponent(`
+      <svg width="${size}" height="${size}" xmlns="http://www.w3.org/2000/svg">
+        <rect width="${size}" height="${size}" fill="white" stroke="black" stroke-width="1"/>
+      </svg>`),
+  scaledSize: new google.maps.Size(size, size),
+});
+
+export const GoogleGeoRenderer = ({
+  map,
+  tempGeoData,
+  savedGeoData,
+  markerIconUrl,
+  pointMarkersRef,
+  polylinesRef,
+  polylineVertexMarkersRef,
+}: GoogleGeoRendererProps) => {
+  useEffect(() => {
+    if (!map) return;
+
+    const allGeo = normalizeGeoData({
+      type: "FeatureCollection",
+      features: [...(savedGeoData.features ?? []), ...(tempGeoData.features ?? [])],
+    });
+
+    // --- POINT MARKERS ---
+    const points = allGeo.features.filter(f => f.properties.type === "marker");
+    const pointIds = new Set(points.map(f => f.properties.id));
+
+    pointMarkersRef.current.forEach((marker, id) => {
+      if (!pointIds.has(id)) {
+        marker.setMap(null);
+        pointMarkersRef.current.delete(id);
+      }
+    });
+
+    points.forEach(f => {
+      const id = f.properties.id;
+      if (!pointMarkersRef.current.has(id)) {
+        const [lng, lat] = f.geometry.coordinates as [number, number];
+        const marker = new google.maps.Marker({
+          position: new google.maps.LatLng(lat, lng),
+          map,
+          icon: markerIconUrl
+            ? { url: markerIconUrl, scaledSize: new google.maps.Size(32, 32) }
+            : undefined,
+        });
+        pointMarkersRef.current.set(id, marker);
+      }
+    });
+
+    // --- POLYLINES + VERTEX MARKERS ---
+    const lines = allGeo.features.filter(f => f.properties.type === "polyline" && f.geometry.type === "LineString");
+    const lineIds = new Set(lines.map(f => f.properties.id));
+
+    Array.from(polylinesRef.current.keys()).forEach(id => {
+      if (!lineIds.has(id)) {
+        polylinesRef.current.get(id)?.setMap(null);
+        polylinesRef.current.delete(id);
+
+        polylineVertexMarkersRef.current.get(id)?.forEach(m => m.setMap(null));
+        polylineVertexMarkersRef.current.delete(id);
+      }
+    });
+
+    lines.forEach(line => {
+      const id = line.properties.id;
+      const coords = line.geometry.coordinates as [number, number][];
+      const path = coords.map(([lng, lat]) => new google.maps.LatLng(lat, lng));
+
+      let polyline = polylinesRef.current.get(id);
+      if (!polyline) {
+        polyline = new google.maps.Polyline({ map, path, strokeColor: "#FF0000", strokeOpacity: 1, strokeWeight: 3 });
+        polylinesRef.current.set(id, polyline);
+      } else {
+        polyline.setPath(path);
+      }
+
+      let markers = polylineVertexMarkersRef.current.get(id) || [];
+      for (let i = markers.length; i < coords.length; i++) {
+        const [lng, lat] = coords[i];
+        markers.push(new google.maps.Marker({ position: new google.maps.LatLng(lat, lng), map, icon: VERTEX_ICON(), clickable: false }));
+      }
+      polylineVertexMarkersRef.current.set(id, markers);
+    });
+  }, [map, tempGeoData, savedGeoData, markerIconUrl]);
+
+  return null;
+};
