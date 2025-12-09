@@ -53,10 +53,7 @@ const YandexEngine: FC<YandexEngineProps> = ({ providerId, drawActionType, marke
   const styleTagRef = useRef<HTMLStyleElement | null>(null);
   const containerIdRef = useRef<string | null>(null);
 
-  const [geoData, setGeoData] = useState<GeoJSON.FeatureCollection>({
-    type: "FeatureCollection",
-    features: [],
-  });
+  const [geoData, setGeoData] = useState<GeoJSON.FeatureCollection | undefined>();
 
   useEffect(() => {
     drawActionRef.current = drawActionType;
@@ -108,20 +105,21 @@ const YandexEngine: FC<YandexEngineProps> = ({ providerId, drawActionType, marke
                 properties: { id: nextIdRef.current++, type: "marker" },
               };
               setGeoData((prev) => ({
-                ...prev,
-                features: [...prev.features, newMarker],
+                type: "FeatureCollection",
+                features: [...(prev?.features || []), newMarker],
               }));
             }
 
             if (drawActionRef.current === DrawActionType.POLYLINE) {
               setGeoData((prev) => {
-                const lastIndex = prev.features.findIndex(
+                const features = prev?.features || [];
+                const lastIndex = features.findIndex(
                   (f) => f.properties?.id === "active-polyline" && f.geometry.type === "LineString"
                 );
 
                 const coordsArray =
                   lastIndex !== -1
-                    ? [...(prev.features[lastIndex].geometry as GeoJSON.LineString).coordinates, coords]
+                    ? [...(features[lastIndex].geometry as GeoJSON.LineString).coordinates, coords]
                     : [coords];
 
                 const newPolyline: GeoJSON.Feature<GeoJSON.LineString> = {
@@ -130,8 +128,8 @@ const YandexEngine: FC<YandexEngineProps> = ({ providerId, drawActionType, marke
                   properties: { id: "active-polyline", type: "polyline" },
                 };
 
-                const features = prev.features.filter((f) => f.properties?.id !== "active-polyline");
-                return { ...prev, features: [...features, newPolyline] };
+                const updatedFeatures = features.filter((f) => f.properties?.id !== "active-polyline");
+                return { type: "FeatureCollection", features: [...updatedFeatures, newPolyline] };
               });
             }
           };
@@ -158,7 +156,7 @@ const YandexEngine: FC<YandexEngineProps> = ({ providerId, drawActionType, marke
 
   useEffect(() => {
     const map = mapRef.current;
-    if (!map) return;
+    if (!map || !geoData) return;
 
     markersRef.current.forEach((m) => map.geoObjects.remove(m));
     markersRef.current = [];
