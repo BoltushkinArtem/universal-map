@@ -1,8 +1,9 @@
-import React, { FC, useEffect, useRef, useState } from "react";
+import React, { FC, useCallback, useEffect, useRef, useState } from "react";
 import styles from "./YandexEngine.module.scss";
 import { DrawActionType } from "../drawActionType";
 import { GeoData } from "../geoDataType";
 import { updateGeoData } from "../../utils/updateGeoData";
+import { normalizeGeoData } from "../../utils/geoDataNormalizer";
 
 declare global {
     interface Window {
@@ -54,7 +55,6 @@ const YandexEngine: FC<YandexEngineProps> = ({
     const containerRef = useRef<HTMLDivElement | null>(null);
     const mapRef = useRef<any>(null);
 
-    // Map<id, geoObject | {main, squares}>
     const objectsRef = useRef<Record<string, any>>({});
 
     const drawActionRef = useRef(drawActionType);
@@ -63,19 +63,22 @@ const YandexEngine: FC<YandexEngineProps> = ({
 
     const [geoData, setGeoData] = useState<GeoData | undefined>();
 
-    const handleClick = (e: any) => {
+    const geoDataRef = useRef<GeoData | undefined>(geoData);
+
+    useEffect(() => {
+        geoDataRef.current = geoData;
+    }, [geoData]);
+
+    const handleClick = useCallback((e: any) => {
         const coords: [number, number] = e.get("coords");
         const action = drawActionRef.current;
         if (!action) return;
 
-        setGeoData((prev) =>
-            updateGeoData(
-                { type: "FeatureCollection", features: [...(prev?.features || [])] },
-                coords,
-                action
-            )
-        );
-    };
+        const updatedGeoData = updateGeoData(normalizeGeoData(geoDataRef.current), coords, action);
+
+        geoDataRef.current = updatedGeoData;
+        setGeoData(updatedGeoData);
+    }, []);
 
     useEffect(() => {
         drawActionRef.current = drawActionType;
