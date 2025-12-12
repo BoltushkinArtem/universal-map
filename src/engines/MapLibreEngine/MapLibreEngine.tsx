@@ -6,7 +6,7 @@ import { GeoData } from "../geoDataType";
 import { MapLibreGeoRenderer } from "./MapLibreGeoRenderer";
 import { useMapLibreMapInit } from "./hooks/useMapLibreMapInit";
 import { useMapLibreDrawHandler } from "./hooks/useMapLibreDrawHandler";
-import { useMapCursor } from "./hooks/useMapCursor";
+import { useMapLibreMapCursor } from "./hooks/useMapLibreMapCursor";
 
 /**
  * Пропсы компонента MapLibreEngine
@@ -83,7 +83,7 @@ const MapLibreEngine: FC<MapLibreEngineProps> = ({
    * - crosshair при активном drawActionType
    * - default при отсутствии действия рисования
    */
-  useMapCursor(mapRef, drawActionType, mapReady);
+  useMapLibreMapCursor(mapRef, drawActionType, mapReady);
 
   return (
     <>

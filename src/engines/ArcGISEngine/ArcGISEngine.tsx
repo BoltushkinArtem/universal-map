@@ -1,10 +1,11 @@
-import React, { FC, useRef, useEffect } from "react";
+import React, { FC, useRef } from "react";
 import styles from "./ArcGISEngine.module.scss";
 import { DrawActionType } from "../drawActionType";
 import { GeoData } from "../geoDataType";
 import { ArcGISGeoRenderer } from "./ArcGISGeoRenderer";
 import { useArcGISMapInit } from "./hooks/useArcGISMapInit";
 import { useArcGISDrawHandler } from "./hooks/useArcGISDrawHandler";
+import { useArcGISMapCursor } from "./hooks/useArcGISMapCursor";
 
 /**
  * Пропсы компонента ArcGISEngine
@@ -30,14 +31,14 @@ interface ArcGISEngineProps {
 }
 
 /**
- * ArcGISEngine — компонент, который инициализирует карту ArcGIS,
- * управляет режимами рисования и рендерит фичи через ArcGISGeoRenderer.
+ * ArcGISEngine — компонент, который:
+ * 1. Инициализирует карту ArcGIS и слой графики через useArcGISMapInit.
+ * 2. Управляет стилем курсора контейнера через useArcGISMapCursor.
+ * 3. Подписывается на клики для добавления точек или линий через useArcGISDrawHandler.
+ * 4. Делегирует рендер графики (точки, линии) в ArcGISGeoRenderer.
  *
- * Логика:
- * 1. Инициализация карты и слоя графики через useArcGISMapInit.
- * 2. Управление курсором в зависимости от drawActionType.
- * 3. Подписка на клики для добавления точек или линий через useArcGISDrawHandler.
- * 4. Рендер графики через ArcGISGeoRenderer.
+ * Компонент отвечает только за координацию и управление DOM-контейнером.
+ * Логика рендеринга и обработки кликов вынесена в хуки и ArcGISGeoRenderer.
  */
 const ArcGISEngine: FC<ArcGISEngineProps> = ({
   providerId,
@@ -47,29 +48,37 @@ const ArcGISEngine: FC<ArcGISEngineProps> = ({
   savedGeoData,
   onUpdateGeoData,
 }) => {
-  /** Ref контейнера карты */
+  /**
+   * Ref на DOM-элемент контейнера карты.
+   * Non-null assertion используется, т.к. элемент гарантированно будет смонтирован до инициализации карты.
+   */
   const containerRef = useRef<HTMLDivElement>(null!);
 
-  /** Инициализация карты, слоя графики и загрузка модулей ArcGIS */
+  /**
+   * Инициализация карты, слоя графики и загрузка необходимых модулей ArcGIS.
+   * viewRef — Ref на экземпляр ArcGIS MapView.
+   * graphicsLayerRef — Ref на слой графики для рендеринга точек и линий.
+   * esriModulesRef — Ref на загруженные модули ArcGIS API.
+   * mapReady — флаг готовности карты.
+   */
   const { viewRef, graphicsLayerRef, esriModulesRef, mapReady } = useArcGISMapInit({
     providerId,
     containerRef,
   });
 
   /**
-   * Управление курсором контейнера карты
-   * - Курсор "crosshair", если активен режим рисования
-   * - Курсор "grab" в обычном режиме
+   * Управление стилем курсора контейнера карты.
+   * - Курсор "crosshair" при активном режиме рисования.
+   * - Курсор "grab" в обычном режиме.
+   * Вынос в отдельный хук повышает читаемость и повторное использование.
    */
-  useEffect(() => {
-    if (!containerRef.current) return;
-    containerRef.current.style.cursor = drawActionType ? "crosshair" : "grab";
-  }, [drawActionType]);
+  useArcGISMapCursor(containerRef, drawActionType);
 
   /**
-   * Подписка на клики карты для режима рисования
-   * - Использует хук useArcGISDrawHandler
-   * - Добавляет точки или линии в GeoData
+   * Подписка на клики карты для добавления точек или линий.
+   * useArcGISDrawHandler:
+   * - Обрабатывает клики пользователя по карте.
+   * - Обновляет tempGeoData через onUpdateGeoData.
    */
   useArcGISDrawHandler({
     viewRef,
@@ -80,7 +89,7 @@ const ArcGISEngine: FC<ArcGISEngineProps> = ({
 
   return (
     <>
-      {/* Контейнер карты */}
+      {/* Контейнер для карты ArcGIS */}
       <div ref={containerRef} className={styles.arcgisContainer} />
 
       {/* Рендер графики: точки и линии */}

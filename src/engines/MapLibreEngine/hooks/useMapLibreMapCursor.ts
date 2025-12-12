@@ -14,7 +14,7 @@ import { DrawActionType } from "../../drawActionType";
  * @param drawActionType - Тип текущего действия рисования (MARKER / POLYLINE / undefined)
  * @param mapReady - Флаг готовности карты. Только после true можно менять курсор.
  */
-export const useMapCursor = (
+export const useMapLibreMapCursor = (
   mapRef: React.RefObject<MapLibreMap | null>,
   drawActionType?: DrawActionType,
   mapReady?: boolean

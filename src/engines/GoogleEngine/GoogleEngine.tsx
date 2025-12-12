@@ -5,7 +5,7 @@ import { GeoData } from "../geoDataType";
 import { GoogleGeoRenderer } from "./GoogleGeoRenderer";
 import { useGoogleMapInit } from "./hooks/useGoogleMapInit";
 import { useGoogleDrawHandler } from "./hooks/useGoogleDrawHandler";
-import { useMapCursor } from "./hooks/useMapCursor";
+import { useGoogleMapCursor } from "./hooks/useGoogleMapCursor";
 
 /**
  * Props компонента GoogleEngine
@@ -104,7 +104,7 @@ const GoogleEngine: FC<GoogleEngineProps> = ({
    * - Если drawActionType отсутствует — курсор "grab"
    * Хук использует containerIdRef и styleTagRef для локального CSS.
    */
-  useMapCursor(containerIdRef, styleTagRef, drawActionType);
+  useGoogleMapCursor(containerIdRef, styleTagRef, drawActionType);
 
   return (
     <>

@@ -16,7 +16,7 @@ import { DrawActionType } from "../../drawActionType";
  * @param styleTagRef - Ref на тег <style>, в который вставляется локальный CSS
  * @param drawActionType - Текущий режим рисования (MARKER | POLYLINE | undefined)
  */
-export const useMapCursor = (
+export const useGoogleMapCursor = (
   containerIdRef: React.RefObject<string>,
   styleTagRef: React.RefObject<HTMLStyleElement | null>,
   drawActionType?: DrawActionType
