@@ -1,10 +1,11 @@
 import React, { FC, useCallback, useEffect, useRef } from "react";
 import styles from "./YandexEngine.module.scss";
 import { DrawActionType } from "../drawActionType";
-import { GeoData, GeoFeature } from "../geoDataType";
+import { GeoData } from "../geoDataType";
 import { updateGeoData } from "../../utils/updateGeoData";
 import { normalizeGeoData } from "../../utils/geoDataNormalizer";
-import { YandexGeoRenderer } from "./YandexGeoRenderer"; // наш новый рендерер
+import { YandexGeoRenderer } from "./YandexGeoRenderer";
+import { fromYandexCoords } from "./utils/coordinateConverter";
 
 declare global {
     interface Window {
@@ -25,11 +26,7 @@ const loadYandexMaps = (apiKey: string): Promise<void> => {
         const script = document.createElement("script");
         script.src = `https://api-maps.yandex.ru/2.1/?apikey=${apiKey}&lang=ru_RU`;
         script.async = true;
-
-        script.onload = () => {
-            if (window.ymaps?.ready) window.ymaps.ready(resolve);
-            else reject(new Error("Yandex Maps failed to load"));
-        };
+        script.onload = () => window.ymaps?.ready(resolve);
         script.onerror = () => reject(new Error("Failed to load Yandex Maps"));
 
         document.head.appendChild(script);
@@ -50,7 +47,7 @@ interface YandexEngineProps {
 const DEFAULT_CENTER: [number, number] = [55.7558, 37.6173];
 const DEFAULT_ZOOM = 10;
 
-const YandexEngine: FC<YandexEngineProps> = ({
+export const YandexEngine: FC<YandexEngineProps> = ({
     providerId,
     drawActionType,
     markerIconUrl,
@@ -65,37 +62,32 @@ const YandexEngine: FC<YandexEngineProps> = ({
     const styleTagRef = useRef<HTMLStyleElement | null>(null);
     const containerIdRef = useRef<string | null>(null);
 
-    // --- обновляем ref для drawActionType ---
     useEffect(() => {
         drawActionRef.current = drawActionType;
     }, [drawActionType]);
 
-    // --- обработчик клика ---
     const handleClick = useCallback(
         (e: any) => {
-            const coords: [number, number] = e.get("coords");
+            const coords: [number, number] = fromYandexCoords(e.get("coords"));
             const action = drawActionRef.current;
             if (!action) return;
-
             onUpdateGeoData(updateGeoData(normalizeGeoData(tempGeoData), coords, action));
         },
         [tempGeoData, onUpdateGeoData]
     );
 
-    // --- инициализация карты ---
     useEffect(() => {
         const apiKey = (import.meta.env as any).VITE_YANDEX_API_KEY;
         if (!apiKey || !containerRef.current) return;
 
         if (!containerIdRef.current) {
-            containerIdRef.current =
-                "yandex-map-" + Date.now() + "-" + Math.random().toString(36).slice(2);
+            containerIdRef.current = "yandex-map-" + Date.now() + "-" + Math.random().toString(36).slice(2);
             containerRef.current.id = containerIdRef.current;
         }
 
         let isUnmounted = false;
 
-        const initializeMap = async () => {
+        const initMap = async () => {
             try {
                 await loadYandexMaps(apiKey);
                 if (isUnmounted || !containerRef.current) return;
@@ -107,32 +99,26 @@ const YandexEngine: FC<YandexEngineProps> = ({
                             ? "yandex#hybrid"
                             : "yandex#map";
 
-                const map =
-                    mapRef.current ||
-                    new window.ymaps.Map(containerRef.current, {
-                        center: DEFAULT_CENTER,
-                        zoom: DEFAULT_ZOOM,
-                        type: mapType,
-                        controls: [],
-                    });
+                const map = mapRef.current || new window.ymaps.Map(containerRef.current, {
+                    center: DEFAULT_CENTER,
+                    zoom: DEFAULT_ZOOM,
+                    type: mapType,
+                    controls: [],
+                });
 
                 mapRef.current = map;
                 map.setType(mapType);
 
-                // --- подписка на клик ---
                 const clickHandler = (e: any) => handleClick(e);
                 map.events.add("click", clickHandler);
 
-                // --- очистка подписки при unmount ---
-                return () => {
-                    map.events.remove("click", clickHandler);
-                };
+                return () => map.events.remove("click", clickHandler);
             } catch (e) {
-                console.error("Yandex Maps initialization error:", e);
+                console.error("Yandex Maps init error:", e);
             }
         };
 
-        const cleanupPromise = initializeMap();
+        const cleanupPromise = initMap();
 
         return () => {
             isUnmounted = true;
@@ -140,25 +126,20 @@ const YandexEngine: FC<YandexEngineProps> = ({
         };
     }, [providerId, handleClick]);
 
-    // --- курсор ---
     useEffect(() => {
         const container = containerRef.current;
         if (!container || !containerIdRef.current) return;
-
         if (!styleTagRef.current) {
             const styleTag = document.createElement("style");
             document.head.appendChild(styleTag);
             styleTagRef.current = styleTag;
         }
-
-        const cursorStyle = drawActionRef.current ? "crosshair" : "grab";
-
         styleTagRef.current.innerHTML = `
-      #${containerIdRef.current} .ymaps-2-1-79-map,
-      #${containerIdRef.current} .ymaps-2-1-79-map * {
-        cursor: ${cursorStyle} !important;
-      }
-    `;
+            #${containerIdRef.current} .ymaps-2-1-79-map,
+            #${containerIdRef.current} .ymaps-2-1-79-map * {
+                cursor: ${drawActionRef.current ? "crosshair" : "grab"} !important;
+            }
+        `;
     }, [drawActionType]);
 
     return (

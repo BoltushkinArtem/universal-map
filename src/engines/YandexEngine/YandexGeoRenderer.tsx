@@ -1,8 +1,9 @@
 import { useEffect, useCallback } from "react";
 import { GeoData, GeoFeature } from "../geoDataType";
+import { toYandexCoords } from "./utils/coordinateConverter";
 
 interface YandexGeoRendererProps {
-    map: any; // window.ymaps.Map
+    map: any;
     tempGeoData: GeoData;
     savedGeoData?: GeoData;
     markerIconUrl?: string;
@@ -25,11 +26,7 @@ export const YandexGeoRenderer = ({
 
     const renderMarkers = useCallback(() => {
         if (!map) return;
-
-        const normalizedSaved = savedGeoData ?? { type: "FeatureCollection", features: [] };
-        const normalizedTemp = tempGeoData;
-
-        const allPoints = [...normalizedSaved.features, ...normalizedTemp.features].filter(isPointFeature);
+        const allPoints = [...(savedGeoData?.features ?? []), ...tempGeoData.features].filter(isPointFeature);
         const newIds = new Set<string>();
 
         allPoints.forEach((feature) => {
@@ -38,13 +35,12 @@ export const YandexGeoRenderer = ({
             newIds.add(id);
 
             let marker = markersRef.current.get(id);
-
-            const [lat, lng] = feature.geometry.coordinates; // Yandex: [lat, lng]
+            const coords = toYandexCoords(feature.geometry.coordinates);
 
             if (marker) {
-                marker.geometry.setCoordinates([lat, lng]);
+                marker.geometry.setCoordinates(coords);
             } else {
-                marker = new window.ymaps.Placemark([lat, lng], {}, {
+                marker = new window.ymaps.Placemark(coords, {}, {
                     iconLayout: "default#image",
                     iconImageHref: markerIconUrl ?? "https://maps.google.com/mapfiles/ms/icons/red-dot.png",
                     iconImageSize: [32, 32],
@@ -64,55 +60,50 @@ export const YandexGeoRenderer = ({
 
     }, [map, markerIconUrl, savedGeoData, tempGeoData, markersRef]);
 
-    const renderGeoData = useCallback(() => {
+    const renderLines = useCallback(() => {
         if (!map) return;
+        const allLines = [...(savedGeoData?.features ?? []), ...tempGeoData.features].filter(isLineFeature);
 
-        const normalizedSaved = savedGeoData ?? { type: "FeatureCollection", features: [] };
-        const normalizedTemp = tempGeoData;
-        const allFeatures = [...normalizedSaved.features, ...normalizedTemp.features];
-
-        // Линии
-        allFeatures.filter(isLineFeature).forEach((feature) => {
+        allLines.forEach((feature) => {
             const id = feature.properties?.id?.toString();
             if (!id) return;
 
             let item = markersRef.current.get(id);
 
+            const coords = feature.geometry.coordinates.map(toYandexCoords);
+
             if (item) {
-                item.main.geometry.setCoordinates(feature.geometry.coordinates);
-                feature.geometry.coordinates.forEach((coord, idx) => {
-                    item.squares[idx].geometry.setCoordinates(coord);
-                });
+                item.main.geometry.setCoordinates(coords);
+                item.squares.forEach((sq: any, idx: number) => sq.geometry.setCoordinates(coords[idx]));
             } else {
-                const poly = new window.ymaps.Polyline(feature.geometry.coordinates, {}, {
+                const poly = new window.ymaps.Polyline(coords, {}, {
                     strokeColor: "#FF0000",
                     strokeWidth: 3,
                     strokeOpacity: 1,
                 });
-
-                const squares = feature.geometry.coordinates.map((coord) => {
-                    return new window.ymaps.Placemark(coord, {}, {
-                        iconLayout: "default#image",
-                        iconImageHref: `data:image/svg+xml;charset=UTF-8,${encodeURIComponent(`
-              <svg xmlns="http://www.w3.org/2000/svg" width="10" height="10">
-                <rect width="10" height="10" fill="white" stroke="black" stroke-width="1"/>
-              </svg>
-            `)}`,
-                        iconImageSize: [10, 10],
-                        iconImageOffset: [-5, -5],
-                        draggable: false,
-                    });
-                });
+                const squares = coords.map((coord) => new window.ymaps.Placemark(coord, {}, {
+                    iconLayout: "default#image",
+                    iconImageHref: `data:image/svg+xml;charset=UTF-8,${encodeURIComponent(`
+                        <svg xmlns="http://www.w3.org/2000/svg" width="10" height="10">
+                          <rect width="10" height="10" fill="white" stroke="black" stroke-width="1"/>
+                        </svg>
+                    `)}`,
+                    iconImageSize: [10, 10],
+                    iconImageOffset: [-5, -5],
+                    draggable: false,
+                }));
 
                 map.geoObjects.add(poly);
                 squares.forEach((sq) => map.geoObjects.add(sq));
                 markersRef.current.set(id, { main: poly, squares });
             }
         });
+    }, [map, savedGeoData, tempGeoData, markersRef]);
 
+    const renderGeoData = useCallback(() => {
+        renderLines();
         renderMarkers();
-
-    }, [map, renderMarkers, savedGeoData, tempGeoData, markersRef]);
+    }, [renderLines, renderMarkers]);
 
     useEffect(() => {
         if (!map) return;
