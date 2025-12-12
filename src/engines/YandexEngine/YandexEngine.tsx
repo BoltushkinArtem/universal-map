@@ -1,9 +1,10 @@
 import React, { FC, useCallback, useEffect, useRef } from "react";
 import styles from "./YandexEngine.module.scss";
 import { DrawActionType } from "../drawActionType";
-import { GeoData } from "../geoDataType";
+import { GeoData, GeoFeature } from "../geoDataType";
 import { updateGeoData } from "../../utils/updateGeoData";
 import { normalizeGeoData } from "../../utils/geoDataNormalizer";
+import { YandexGeoRenderer } from "./YandexGeoRenderer"; // наш новый рендерер
 
 declare global {
     interface Window {
@@ -12,7 +13,6 @@ declare global {
 }
 
 let yandexMapsPromise: Promise<void> | null = null;
-
 const loadYandexMaps = (apiKey: string): Promise<void> => {
     if (yandexMapsPromise) return yandexMapsPromise;
 
@@ -60,7 +60,7 @@ const YandexEngine: FC<YandexEngineProps> = ({
 }) => {
     const containerRef = useRef<HTMLDivElement | null>(null);
     const mapRef = useRef<any>(null);
-    const objectsRef = useRef<Record<string, any>>({});
+    const markersRef = useRef<Map<string, any>>(new Map());
     const drawActionRef = useRef(drawActionType);
     const styleTagRef = useRef<HTMLStyleElement | null>(null);
     const containerIdRef = useRef<string | null>(null);
@@ -89,10 +89,7 @@ const YandexEngine: FC<YandexEngineProps> = ({
 
         if (!containerIdRef.current) {
             containerIdRef.current =
-                "yandex-map-" +
-                Date.now() +
-                "-" +
-                Math.random().toString(36).slice(2);
+                "yandex-map-" + Date.now() + "-" + Math.random().toString(36).slice(2);
             containerRef.current.id = containerIdRef.current;
         }
 
@@ -141,110 +138,7 @@ const YandexEngine: FC<YandexEngineProps> = ({
             isUnmounted = true;
             cleanupPromise?.then((cleanup) => cleanup && cleanup());
         };
-    }, [providerId, markerIconUrl, handleClick]);
-
-    // --- рендер объектов без мерцания ---
-    useEffect(() => {
-        const map = mapRef.current;
-        if (!map || !tempGeoData) return;
-
-        const store = objectsRef.current;
-        const existingFeatureIds = new Set(Object.keys(store));
-
-        const normalizedSaved = normalizeGeoData(savedGeoData);
-        const normalizedTemp = normalizeGeoData(tempGeoData);
-
-        const allPoints = [...normalizedSaved.features, ...normalizedTemp.features];
-
-        allPoints.forEach((feature) => {
-            const id = feature.properties.id;
-
-            if (store[id]) {
-                existingFeatureIds.delete(id);
-                if (feature.geometry.type === "LineString") {
-                    const item = store[id];
-                    item.main.geometry.setCoordinates(feature.geometry.coordinates);
-                    const coords = feature.geometry.coordinates;
-                    if (item.squares.length < coords.length) {
-                        for (let i = item.squares.length; i < coords.length; i++) {
-                            const sq = new window.ymaps.Placemark([0, 0], {}, {
-                                iconLayout: "default#image",
-                                iconImageHref:
-                                    "data:image/svg+xml;charset=UTF-8," +
-                                    encodeURIComponent(`
-                                        <svg xmlns="http://www.w3.org/2000/svg" width="10" height="10">
-                                            <rect width="10" height="10" fill="white" stroke="black" stroke-width="1"/>
-                                        </svg>
-                                    `),
-                                iconImageSize: [10, 10],
-                                iconImageOffset: [-5, -5],
-                                draggable: false,
-                            });
-                            map.geoObjects.add(sq);
-                            item.squares.push(sq);
-                        }
-                    }
-                    coords.forEach((coord, i) => {
-                        item.squares[i].geometry.setCoordinates(coord);
-                    });
-                }
-                return;
-            }
-
-            if (feature.geometry.type === "Point") {
-                const obj = new window.ymaps.Placemark(feature.geometry.coordinates, {}, {
-                    iconLayout: "default#image",
-                    iconImageHref:
-                        markerIconUrl || "https://maps.google.com/mapfiles/ms/icons/red-dot.png",
-                    iconImageSize: [32, 32],
-                    draggable: true,
-                });
-                store[id] = obj;
-                map.geoObjects.add(obj);
-                existingFeatureIds.delete(id);
-                return;
-            }
-
-            if (feature.geometry.type === "LineString") {
-                const poly = new window.ymaps.Polyline(feature.geometry.coordinates, {}, {
-                    strokeColor: "#FF0000",
-                    strokeWidth: 3,
-                    strokeOpacity: 1,
-                });
-                const squares = feature.geometry.coordinates.map((coord) => {
-                    return new window.ymaps.Placemark(coord, {}, {
-                        iconLayout: "default#image",
-                        iconImageHref:
-                            "data:image/svg+xml;charset=UTF-8," +
-                            encodeURIComponent(`
-                                <svg xmlns="http://www.w3.org/2000/svg" width="10" height="10">
-                                    <rect width="10" height="10" fill="white" stroke="black" stroke-width="1"/>
-                                </svg>
-                            `),
-                        iconImageSize: [10, 10],
-                        iconImageOffset: [-5, -5],
-                        draggable: false,
-                    });
-                });
-                store[id] = { main: poly, squares };
-                map.geoObjects.add(poly);
-                squares.forEach((sq) => map.geoObjects.add(sq));
-                existingFeatureIds.delete(id);
-            }
-        });
-
-        existingFeatureIds.forEach((id) => {
-            const item = store[id];
-            if (!item) return;
-            if (item.main && item.squares) {
-                map.geoObjects.remove(item.main);
-                item.squares.forEach((s: any) => map.geoObjects.remove(s));
-            } else {
-                map.geoObjects.remove(item);
-            }
-            delete store[id];
-        });
-    }, [tempGeoData, savedGeoData, markerIconUrl]);
+    }, [providerId, handleClick]);
 
     // --- курсор ---
     useEffect(() => {
@@ -257,18 +151,30 @@ const YandexEngine: FC<YandexEngineProps> = ({
             styleTagRef.current = styleTag;
         }
 
-        const cursorStyle =
-            drawActionRef.current === DrawActionType.POLYLINE ? "crosshair" : "grab";
+        const cursorStyle = drawActionRef.current === DrawActionType.POLYLINE ? "crosshair" : "grab";
 
         styleTagRef.current.innerHTML = `
-            #${containerIdRef.current} .ymaps-2-1-79-map,
-            #${containerIdRef.current} .ymaps-2-1-79-map * {
-                cursor: ${cursorStyle} !important;
-            }
-        `;
+      #${containerIdRef.current} .ymaps-2-1-79-map,
+      #${containerIdRef.current} .ymaps-2-1-79-map * {
+        cursor: ${cursorStyle} !important;
+      }
+    `;
     }, [drawActionType]);
 
-    return <div ref={containerRef} className={styles.mapContainer} />;
+    return (
+        <>
+            <div ref={containerRef} className={styles.mapContainer} />
+            {mapRef.current && (
+                <YandexGeoRenderer
+                    map={mapRef.current}
+                    tempGeoData={tempGeoData}
+                    savedGeoData={savedGeoData}
+                    markerIconUrl={markerIconUrl}
+                    markersRef={markersRef}
+                />
+            )}
+        </>
+    );
 };
 
 export default YandexEngine;
