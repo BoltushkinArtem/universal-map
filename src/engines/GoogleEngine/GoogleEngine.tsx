@@ -1,10 +1,11 @@
-import React, { FC, useCallback, useEffect, useRef } from "react";
+import React, { FC, useRef } from "react";
 import styles from "./GoogleEngine.module.scss";
 import { DrawActionType } from "../drawActionType";
 import { GeoData } from "../geoDataType";
 import { GoogleGeoRenderer } from "./GoogleGeoRenderer";
 import { useGoogleMapInit } from "./hooks/useGoogleMapInit";
 import { useGoogleDrawHandler } from "./hooks/useGoogleDrawHandler";
+import { useMapCursor } from "./hooks/useMapCursor";
 
 /**
  * Props компонента GoogleEngine
@@ -87,37 +88,6 @@ const GoogleEngine: FC<GoogleEngineProps> = ({
   });
 
   /**
-   * updateCursor — функция, которая вставляет/обновляет тег <style> с локальным селектором контейнера
-   * и меняет курсор на map container в зависимости от текущего drawActionType.
-   *
-   * Используем useCallback чтобы гарантировать стабильность ссылки функции для эффектов.
-   *
-   * Примечание: стили применяются к внутренним элементам Google Maps (`.gm-style`),
-   * поэтому мы таргетим `#containerId .gm-style`.
-   */
-  const updateCursor = useCallback(() => {
-    // получаем id контейнера, созданный в хукe useGoogleMapInit
-    const containerId = containerIdRef.current;
-    if (!containerId) return;
-
-    // получаем или создаём тег <style> для внесения локального CSS
-    let style = styleTagRef.current;
-    if (!style) {
-      style = document.createElement("style");
-      styleTagRef.current = style;
-      document.head.appendChild(style);
-    }
-
-    // Вставляем CSS-перезапись курсора. drawActionType определяет вид курсора.
-    style.innerHTML = `
-      #${containerId} .gm-style,
-      #${containerId} .gm-style * {
-        cursor: ${drawActionType ? "crosshair" : "grab"} !important;
-      }
-    `;
-  }, [drawActionType, containerIdRef, styleTagRef]);
-
-  /**
    * Подключаем обработчик кликов на карте для режима рисования.
    * Хук useGoogleDrawHandler подписывается на события на mapRef и вызывает onUpdateGeoData.
    */
@@ -129,12 +99,12 @@ const GoogleEngine: FC<GoogleEngineProps> = ({
   });
 
   /**
-   * Эффект синхронизации режима рисования -> курсор.
-   * Вызываем updateCursor при изменении drawActionType.
+   * Управление курсором карты:
+   * - Если drawActionType задан — курсор "crosshair"
+   * - Если drawActionType отсутствует — курсор "grab"
+   * Хук использует containerIdRef и styleTagRef для локального CSS.
    */
-  useEffect(() => {
-    updateCursor();
-  }, [drawActionType, updateCursor]);
+  useMapCursor(containerIdRef, styleTagRef, drawActionType);
 
   return (
     <>
