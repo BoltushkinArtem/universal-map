@@ -1,183 +1,106 @@
-import React, { FC, useCallback, useEffect, useRef, useState } from "react";
+import React, { FC, useRef } from "react";
 import styles from "./YandexEngine.module.scss";
 import { DrawActionType } from "../drawActionType";
 import { GeoData } from "../geoDataType";
-import { updateGeoData } from "../../utils/updateGeoData";
-import { normalizeGeoData } from "../../utils/geoDataNormalizer";
 import { YandexGeoRenderer } from "./YandexGeoRenderer";
-import { fromYandexCoords } from "./utils/coordinateConverter";
-
-declare global {
-    interface Window {
-        ymaps?: any;
-    }
-}
-
-let yandexMapsPromise: Promise<void> | null = null;
+import { useYandexMapCursor } from "./hooks/useYandexMapCursor";
+import { useYandexDrawHandler } from "./hooks/useYandexDrawHandler";
+import { useYandexMapInit } from "./hooks/useYandexMapInit";
 
 /**
- * Загружает Yandex Maps API, если ещё не загружено.
- * @param apiKey - API ключ для Yandex Maps
+ * Пропсы компонента YandexEngine
  */
-const loadYandexMaps = (apiKey: string): Promise<void> => {
-    if (yandexMapsPromise) return yandexMapsPromise;
-
-    yandexMapsPromise = new Promise((resolve, reject) => {
-        if (window.ymaps && window.ymaps.ready) {
-            window.ymaps.ready(resolve);
-            return;
-        }
-
-        const script = document.createElement("script");
-        script.src = `https://api-maps.yandex.ru/2.1/?apikey=${apiKey}&lang=ru_RU`;
-        script.async = true;
-        script.onload = () => window.ymaps?.ready(resolve);
-        script.onerror = () => reject(new Error("Failed to load Yandex Maps"));
-
-        document.head.appendChild(script);
-    });
-
-    return yandexMapsPromise;
-};
-
 interface YandexEngineProps {
-    providerId: string;
-    drawActionType?: DrawActionType;
-    markerIconUrl?: string;
-    tempGeoData: GeoData;
-    savedGeoData: GeoData;
-    onUpdateGeoData: (data: GeoData) => void;
+  /** Тип карты: YandexMap | YandexSatellite | YandexHybrid */
+  providerId: string;
+
+  /** Текущий режим рисования: Point или LineString */
+  drawActionType?: DrawActionType;
+
+  /** URL иконки маркера */
+  markerIconUrl?: string;
+
+  /** Временные геоданные для отображения */
+  tempGeoData: GeoData;
+
+  /** Сохранённые геоданные для отображения */
+  savedGeoData: GeoData;
+
+  /** Колбэк для обновления геоданных после действий пользователя */
+  onUpdateGeoData: (data: GeoData) => void;
 }
 
-const DEFAULT_CENTER: [number, number] = [55.7558, 37.6173];
-const DEFAULT_ZOOM = 10;
-
 /**
- * Компонент-обёртка для Yandex Maps.
- * Управляет инициализацией карты, обработкой кликов и визуализацией геоданных.
+ * YandexEngine — компонент-обёртка для Yandex Maps.
+ *
+ * Отвечает за:
+ * 1. Инициализацию карты через useYandexMapInit
+ * 2. Управление режимами рисования через useYandexDrawHandler
+ * 3. Управление курсором карты через useYandexMapCursor
+ * 4. Рендер маркеров и линий через YandexGeoRenderer после готовности карты
  */
 export const YandexEngine: FC<YandexEngineProps> = ({
-    providerId,
-    drawActionType,
-    markerIconUrl,
-    tempGeoData,
-    savedGeoData,
-    onUpdateGeoData,
+  providerId,
+  drawActionType,
+  markerIconUrl,
+  tempGeoData,
+  savedGeoData,
+  onUpdateGeoData,
 }) => {
-    const containerRef = useRef<HTMLDivElement | null>(null);
-    const mapRef = useRef<any>(null);
-    const markersRef = useRef<Map<string, any>>(new Map());
-    const drawActionRef = useRef(drawActionType);
-    const styleTagRef = useRef<HTMLStyleElement | null>(null);
-    const containerIdRef = useRef<string | null>(null);
+  /**
+   * Ref контейнера карты в DOM
+   * Гарантирует доступ к DOM элементу до инициализации карты
+   */
+  const containerRef = useRef<HTMLDivElement>(null!);
 
-    const [mapLoaded, setMapLoaded] = useState(false);
+  /**
+   * Ref для хранения всех маркеров по их ID
+   * Позволяет управлять маркерами без пересоздания экземпляров
+   */
+  const markersRef = useRef<Map<string, any>>(new Map());
 
-    // Обновление текущего режима рисования
-    useEffect(() => {
-        drawActionRef.current = drawActionType;
-    }, [drawActionType]);
+  /**
+   * Инициализация Yandex Map
+   * Возвращает:
+   * - mapRef: Ref на экземпляр карты
+   * - containerIdRef: Ref с уникальным ID контейнера карты
+   * - mapLoaded: Флаг готовности карты к рендеру
+   */
+  const { mapRef, containerIdRef, mapLoaded } = useYandexMapInit(
+    containerRef,
+    providerId
+  );
 
-    /**
-     * Обработчик клика на карте
-     * @param e - событие клика Yandex Maps
-     */
-    const handleClick = useCallback(
-        (e: any) => {
-            const coords: [number, number] = fromYandexCoords(e.get("coords"));
-            const action = drawActionRef.current;
-            if (!action) return;
-            onUpdateGeoData(updateGeoData(normalizeGeoData(tempGeoData), coords, action));
-        },
-        [tempGeoData, onUpdateGeoData]
-    );
+  /**
+   * Подключение обработчика кликов на карте
+   * - Добавляет точки или линии в tempGeoData в зависимости от drawActionType
+   */
+  useYandexDrawHandler(mapRef, tempGeoData, drawActionType, onUpdateGeoData);
 
-    // Инициализация карты
-    useEffect(() => {
-        const apiKey = (import.meta.env as any).VITE_YANDEX_API_KEY;
-        if (!apiKey || !containerRef.current) return;
+  /**
+   * Управление курсором контейнера карты
+   * - Курсор "crosshair", если активен drawActionType
+   * - Курсор "grab" при отсутствии режима рисования
+   */
+  useYandexMapCursor(containerRef, containerIdRef, drawActionType);
 
-        if (!containerIdRef.current) {
-            containerIdRef.current = `yandex-map-${Date.now()}-${Math.random().toString(36).slice(2)}`;
-            containerRef.current.id = containerIdRef.current;
-        }
+  return (
+    <>
+      {/* Контейнер карты */}
+      <div ref={containerRef} className={styles.mapContainer} />
 
-        let isUnmounted = false;
-
-        const initMap = async () => {
-            try {
-                await loadYandexMaps(apiKey);
-                if (isUnmounted || !containerRef.current) return;
-
-                const mapType =
-                    providerId === "YandexSatellite"
-                        ? "yandex#satellite"
-                        : providerId === "YandexHybrid"
-                            ? "yandex#hybrid"
-                            : "yandex#map";
-
-                const map = mapRef.current || new window.ymaps.Map(containerRef.current, {
-                    center: DEFAULT_CENTER,
-                    zoom: DEFAULT_ZOOM,
-                    type: mapType,
-                    controls: [],
-                });
-
-                mapRef.current = map;
-                map.setType(mapType);
-
-                const clickHandler = (e: any) => handleClick(e);
-                map.events.add("click", clickHandler);
-
-                setMapLoaded(true);
-
-                return () => map.events.remove("click", clickHandler);
-            } catch (e) {
-                console.error("Yandex Maps init error:", e);
-            }
-        };
-
-        const cleanupPromise = initMap();
-
-        return () => {
-            isUnmounted = true;
-            cleanupPromise?.then((cleanup) => cleanup && cleanup());
-        };
-    }, [providerId, handleClick]);
-
-    // Обновление курсора карты в зависимости от режима рисования
-    useEffect(() => {
-        const container = containerRef.current;
-        if (!container || !containerIdRef.current) return;
-
-        if (!styleTagRef.current) {
-            const styleTag = document.createElement("style");
-            document.head.appendChild(styleTag);
-            styleTagRef.current = styleTag;
-        }
-
-        styleTagRef.current.innerHTML = `
-            #${containerIdRef.current} .ymaps-2-1-79-map,
-            #${containerIdRef.current} .ymaps-2-1-79-map * {
-                cursor: ${drawActionRef.current ? "crosshair" : "grab"} !important;
-            }
-        `;
-    }, [drawActionType]);
-
-    return (
-        <>
-            <div ref={containerRef} className={styles.mapContainer} />
-            {mapLoaded && mapRef.current && (
-                <YandexGeoRenderer
-                    map={mapRef.current}
-                    tempGeoData={tempGeoData}
-                    savedGeoData={savedGeoData}
-                    markerIconUrl={markerIconUrl}
-                    markersRef={markersRef}
-                />
-            )}
-        </>
-    );
+      {/* Рендер маркеров и линий только после готовности карты */}
+      {mapLoaded && mapRef.current && (
+        <YandexGeoRenderer
+          map={mapRef.current}
+          tempGeoData={tempGeoData}
+          savedGeoData={savedGeoData}
+          markerIconUrl={markerIconUrl}
+          markersRef={markersRef}
+        />
+      )}
+    </>
+  );
 };
 
 export default YandexEngine;
