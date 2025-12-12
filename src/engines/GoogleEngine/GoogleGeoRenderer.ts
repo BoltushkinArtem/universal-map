@@ -1,8 +1,10 @@
-import { useEffect } from "react";
-import { GeoData } from "../geoDataType";
+import { useEffect, useCallback, RefObject } from "react";
+import { GeoData, GeoFeature } from "../geoDataType";
 import { normalizeGeoData } from "../../utils/geoDataNormalizer";
 
-/** Props компонента GoogleGeoRenderer */
+/**
+ * Props компонента GoogleGeoRenderer
+ */
 interface GoogleGeoRendererProps {
   /** Ссылка на объект карты Google */
   map: google.maps.Map | null;
@@ -12,16 +14,16 @@ interface GoogleGeoRendererProps {
   savedGeoData: GeoData;
   /** URL иконки маркера (опционально) */
   markerIconUrl?: string;
-  /** Ссылки на маркеры точек */
-  pointMarkersRef: React.MutableRefObject<Map<string, google.maps.Marker>>;
-  /** Ссылки на полилинии */
-  polylinesRef: React.MutableRefObject<Map<string, google.maps.Polyline>>;
-  /** Ссылки на маркеры вершин полилиний */
-  polylineVertexMarkersRef: React.MutableRefObject<Map<string, google.maps.Marker[]>>;
+  /** Ref для хранения маркеров точек */
+  pointMarkersRef: RefObject<Map<string, google.maps.Marker>>;
+  /** Ref для хранения полилиний */
+  polylinesRef: RefObject<Map<string, google.maps.Polyline>>;
+  /** Ref для хранения маркеров вершин полилиний */
+  polylineVertexMarkersRef: RefObject<Map<string, google.maps.Marker[]>>;
 }
 
-/** 
- * Функция создания иконки для вершины полилинии.
+/**
+ * Генератор иконки для вершин полилинии Google Maps
  * @param size размер иконки в пикселях (по умолчанию 10)
  * @returns объект конфигурации иконки Google Maps
  */
@@ -36,8 +38,30 @@ const VERTEX_ICON = (size = 10) => ({
 });
 
 /**
+ * Проверка, является ли feature линией (LineString)
+ * @param f - гео-фича
+ * @returns true, если feature является линией
+ */
+const isLineFeature = (
+  f: GeoFeature
+): f is GeoFeature & { geometry: { type: "LineString"; coordinates: [number, number][] } } =>
+  f.geometry.type === "LineString";
+
+/**
+ * Проверка, является ли feature точкой (Point)
+ * @param f - гео-фича
+ * @returns true, если feature является точкой
+ */
+const isPointFeature = (
+  f: GeoFeature
+): f is GeoFeature & { geometry: { type: "Point"; coordinates: [number, number] } } =>
+  f.geometry.type === "Point";
+
+/**
  * Компонент рендеринга геоданных на карте Google.
- * Обрабатывает точки и линии, синхронизирует маркеры и полилинии с текущими данными.
+ * - Отображает точки как маркеры.
+ * - Отображает линии как полилинии с маркерами вершин.
+ * - Синхронизирует состояние карты с актуальными данными.
  */
 export const GoogleGeoRenderer = ({
   map,
@@ -48,33 +72,39 @@ export const GoogleGeoRenderer = ({
   polylinesRef,
   polylineVertexMarkersRef,
 }: GoogleGeoRendererProps) => {
-  useEffect(() => {
-    if (!map) return;
+  /**
+   * Рендер маркеров точек на карте Google.
+   * - Добавляет новые маркеры.
+   * - Обновляет позиции существующих.
+   * - Удаляет устаревшие маркеры.
+   */
+  const renderMarkers = useCallback(() => {
+    if (!map || !pointMarkersRef.current) return;
 
-    // --- Объединяем сохранённые и временные данные и нормализуем их ---
+    // Объединяем временные и сохранённые данные и нормализуем их
     const allGeo = normalizeGeoData({
       type: "FeatureCollection",
       features: [...(savedGeoData.features ?? []), ...(tempGeoData.features ?? [])],
     });
 
-    // --- Рендер маркеров точек ---
-    const points = allGeo.features.filter(f => f.properties.type === "marker");
+    // Фильтруем только точки
+    const points = allGeo.features.filter(isPointFeature);
     const pointIds = new Set(points.map(f => f.properties.id));
 
-    // Удаляем устаревшие маркеры
+    // Удаляем маркеры, которых нет в актуальных данных
     pointMarkersRef.current.forEach((marker, id) => {
       if (!pointIds.has(id)) {
         marker.setMap(null);
-        pointMarkersRef.current.delete(id);
+        pointMarkersRef.current!.delete(id);
       }
     });
 
-    // Добавляем или обновляем маркеры
+    // Создаём новые маркеры или обновляем существующие
     points.forEach(f => {
       const id = f.properties.id;
       const [lng, lat] = f.geometry.coordinates as [number, number];
 
-      if (!pointMarkersRef.current.has(id)) {
+      if (!pointMarkersRef.current!.has(id)) {
         const marker = new google.maps.Marker({
           position: new google.maps.LatLng(lat, lng),
           map,
@@ -82,16 +112,30 @@ export const GoogleGeoRenderer = ({
             ? { url: markerIconUrl, scaledSize: new google.maps.Size(32, 32) }
             : undefined,
         });
-        pointMarkersRef.current.set(id, marker);
+        pointMarkersRef.current!.set(id, marker);
       } else {
-        pointMarkersRef.current.get(id)!.setPosition(new google.maps.LatLng(lat, lng));
+        pointMarkersRef.current!.get(id)!.setPosition(new google.maps.LatLng(lat, lng));
       }
     });
+  }, [map, tempGeoData, savedGeoData, markerIconUrl, pointMarkersRef]);
 
-    // --- Рендер полилиний и их вершин ---
-    const lines = allGeo.features.filter(
-      f => f.properties.type === "polyline" && f.geometry.type === "LineString"
-    );
+  /**
+   * Рендер полилиний и маркеров вершин на карте Google.
+   * - Обновляет существующие полилинии и маркеры вершин.
+   * - Создаёт новые полилинии и маркеры вершин.
+   * - Удаляет устаревшие объекты.
+   */
+  const renderLines = useCallback(() => {
+    if (!map || !polylinesRef.current || !polylineVertexMarkersRef.current) return;
+
+    // Объединяем данные и нормализуем
+    const allGeo = normalizeGeoData({
+      type: "FeatureCollection",
+      features: [...(savedGeoData.features ?? []), ...(tempGeoData.features ?? [])],
+    });
+
+    // Фильтруем линии
+    const lines = allGeo.features.filter(isLineFeature);
     const lineIds = new Set(lines.map(f => f.properties.id));
 
     // Удаляем устаревшие полилинии и маркеры вершин
@@ -105,13 +149,13 @@ export const GoogleGeoRenderer = ({
       }
     });
 
-    // Добавляем или обновляем полилинии и вершины
+    // Создаём или обновляем полилинии и маркеры вершин
     lines.forEach(line => {
       const id = line.properties.id;
       const coords = line.geometry.coordinates as [number, number][];
       const path = coords.map(([lng, lat]) => new google.maps.LatLng(lat, lng));
 
-      // Обновляем или создаём полилинию
+      // Создаём полилинию, если она отсутствует, иначе обновляем путь
       let polyline = polylinesRef.current.get(id);
       if (!polyline) {
         polyline = new google.maps.Polyline({
@@ -126,7 +170,7 @@ export const GoogleGeoRenderer = ({
         polyline.setPath(path);
       }
 
-      // Обновляем или создаём маркеры вершин
+      // Создаём или синхронизируем маркеры вершин
       let markers = polylineVertexMarkersRef.current.get(id) || [];
 
       // Удаляем лишние маркеры, если координат стало меньше
@@ -152,7 +196,25 @@ export const GoogleGeoRenderer = ({
 
       polylineVertexMarkersRef.current.set(id, markers);
     });
-  }, [map, tempGeoData, savedGeoData, markerIconUrl]);
+  }, [map, tempGeoData, savedGeoData, polylinesRef, polylineVertexMarkersRef]);
+
+  /**
+   * Основной рендер всех геоданных
+   * - Сначала линии и вершины.
+   * - Затем точечные маркеры.
+   */
+  const renderGeoData = useCallback(() => {
+    renderLines();
+    renderMarkers();
+  }, [renderLines, renderMarkers]);
+
+  /**
+   * Эффект для автоматического рендера при изменении карты или данных
+   */
+  useEffect(() => {
+    if (!map) return;
+    renderGeoData();
+  }, [map, renderGeoData]);
 
   return null;
 };
