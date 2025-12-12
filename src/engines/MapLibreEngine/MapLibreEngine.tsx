@@ -1,47 +1,42 @@
-import { FC, useEffect, useRef, useCallback, useState } from "react";
-import maplibregl, { Map as MapLibreMap, MapMouseEvent } from "maplibre-gl";
+import { FC, useRef } from "react";
 import "maplibre-gl/dist/maplibre-gl.css";
-import { tileTemplate } from "../../utils/providers";
 import styles from "./MapLibreEngine.module.scss";
 import { DrawActionType } from "../drawActionType";
 import { GeoData } from "../geoDataType";
-import { updateGeoData } from "../../utils/updateGeoData";
 import { MapLibreGeoRenderer } from "./MapLibreGeoRenderer";
-
-/** Начальная позиция карты [долгота, широта] */
-const DEFAULT_CENTER: [number, number] = [37.6173, 55.7558];
-
-/** Начальный масштаб карты */
-const DEFAULT_ZOOM = 10;
+import { useMapLibreMapInit } from "./hooks/useMapLibreMapInit";
+import { useMapLibreDrawHandler } from "./hooks/useMapLibreDrawHandler";
+import { useMapCursor } from "./hooks/useMapCursor";
 
 /**
- * Проверяет, поддерживается ли WebGL
+ * Пропсы компонента MapLibreEngine
  */
-const isWebGLAvailable = (): boolean => {
-  try {
-    const canvas = document.createElement("canvas");
-    return !!(
-      window.WebGLRenderingContext &&
-      (canvas.getContext("webgl") || canvas.getContext("experimental-webgl"))
-    );
-  } catch {
-    return false;
-  }
-};
-
-/** Пропсы компонента MapLibreEngine */
 interface MapLibreEngineProps {
+  /** Идентификатор провайдера для подгрузки тайлов */
   providerId: string;
+  /** Тип действия рисования (маркер или полилиния) */
   drawActionType?: DrawActionType;
+  /** URL иконки для отображения точечных маркеров */
   markerIconUrl?: string;
+  /** Временные геоданные пользователя */
   tempGeoData: GeoData;
+  /** Сохраненные геоданные (опционально) */
   savedGeoData?: GeoData;
+  /** Callback для обновления геоданных при добавлении маркеров или линий */
   onUpdateGeoData: (data: GeoData) => void;
 }
 
 /**
- * MapLibreEngine — компонент для рендеринга карты с MapLibre.
- * Поддерживает добавление маркеров и работу с полилиниями через GeoData.
+ * MapLibreEngine — компонент для отображения карты MapLibre с поддержкой:
+ * - Добавления маркеров
+ * - Рисования полилиний
+ * - Рендеринга вершин линий и маркеров через MapLibreGeoRenderer
+ *
+ * Логика:
+ * 1. Инициализация карты через useMapLibreMapInit.
+ * 2. Обработка кликов по карте и обновление GeoData через useMapLibreDrawHandler.
+ * 3. Управление стилем курсора карты через useMapCursor.
+ * 4. Рендеринг GeoData (маркеры, линии) через MapLibreGeoRenderer после готовности карты.
  */
 const MapLibreEngine: FC<MapLibreEngineProps> = ({
   providerId,
@@ -51,107 +46,51 @@ const MapLibreEngine: FC<MapLibreEngineProps> = ({
   savedGeoData,
   onUpdateGeoData,
 }) => {
-  const mapContainerRef = useRef<HTMLDivElement | null>(null);
-  const mapRef = useRef<MapLibreMap | null>(null);
-  const drawActionRef = useRef(drawActionType);
-  const markersRef = useRef<Map<string, maplibregl.Marker>>(new Map());
-
-  const [mapReady, setMapReady] = useState(false);
-
-  /** Инициализация карты и базового слоя */
-  useEffect(() => {
-    if (!mapContainerRef.current || !isWebGLAvailable()) return;
-
-    setMapReady(false);
-
-    const map = new maplibregl.Map({
-      container: mapContainerRef.current,
-      style: "https://demotiles.maplibre.org/style.json",
-      center: DEFAULT_CENTER,
-      zoom: DEFAULT_ZOOM,
-    });
-
-    mapRef.current = map;
-
-    /** Настройка источников и изображений карты после загрузки */
-    const onLoad = () => {
-      const tiles = tileTemplate(providerId);
-      if (tiles?.length && !map.getSource("basemap")) {
-        map.addSource("basemap", { type: "raster", tiles, tileSize: 256 });
-        map.addLayer({ id: "basemap", type: "raster", source: "basemap" });
-      }
-
-      if (!map.hasImage("white-square")) {
-        const size = 8;
-        const canvas = document.createElement("canvas");
-        canvas.width = size;
-        canvas.height = size;
-        const ctx = canvas.getContext("2d");
-        if (ctx) {
-          ctx.fillStyle = "#ffffff";
-          ctx.fillRect(0, 0, size, size);
-          const imageData = ctx.getImageData(0, 0, size, size);
-          map.addImage("white-square", imageData);
-        }
-      }
-    };
-
-    map.on("load", onLoad);
-
-    const onIdle = () => setMapReady(true);
-    map.on("idle", onIdle);
-
-    return () => {
-      map.off("load", onLoad);
-      map.off("idle", onIdle);
-      map.remove();
-      mapRef.current = null;
-    };
-  }, [providerId]);
-
-  /** Обновление ссылки на текущий тип действия рисования */
-  useEffect(() => {
-    drawActionRef.current = drawActionType;
-    if (mapRef.current) {
-      mapRef.current.getCanvas().style.cursor = drawActionType ? "crosshair" : "";
-    }
-  }, [drawActionType]);
+  /**
+   * Ref на контейнер карты в DOM.
+   * Используется для инициализации экземпляра MapLibre.
+   */
+  const mapContainerRef = useRef<HTMLDivElement>(null!);
 
   /**
-   * Обработчик клика на карте
-   * Добавляет точку или обновляет полилинию в зависимости от текущего DrawActionType
+   * Ref для хранения всех точечных маркеров по их ID.
+   * Позволяет обновлять позиции маркеров без пересоздания.
    */
-  const handleMapClick = useCallback(
-    (event: MapMouseEvent) => {
-      const action = drawActionRef.current;
-      if (!action) return;
+  const markersRef = useRef<Map<string, maplibregl.Marker>>(new Map());
 
-      const coords: [number, number] = [event.lngLat.lng, event.lngLat.lat];
-      onUpdateGeoData(
-        updateGeoData(
-          { type: "FeatureCollection", features: [...tempGeoData.features] },
-          coords,
-          action
-        )
-      );
-    },
-    [tempGeoData, onUpdateGeoData]
-  );
+  /**
+   * Инициализация карты MapLibre.
+   * mapRef — Ref на экземпляр карты, mapReady — флаг готовности карты.
+   */
+  const { mapRef, mapReady } = useMapLibreMapInit({
+    containerRef: mapContainerRef,
+    providerId,
+  });
 
-  /** Подписка на события клика на карте */
-  useEffect(() => {
-    const map = mapRef.current;
-    if (!map) return;
+  /**
+   * Хук для обработки кликов по карте.
+   * Обновляет временные геоданные tempGeoData в зависимости от drawActionType.
+   */
+  useMapLibreDrawHandler({
+    mapRef,
+    drawActionType,
+    tempGeoData,
+    onUpdateGeoData,
+  });
 
-    map.on("click", handleMapClick);
-    return () => {
-      map.off("click", handleMapClick);
-    };
-  }, [handleMapClick]);
+  /**
+   * Управление стилем курсора карты:
+   * - crosshair при активном drawActionType
+   * - default при отсутствии действия рисования
+   */
+  useMapCursor(mapRef, drawActionType, mapReady);
 
   return (
     <>
+      {/* Контейнер карты */}
       <div ref={mapContainerRef} className={styles.mapInner} />
+
+      {/* Рендеринг GeoData (маркеры, линии) только после готовности карты */}
       {mapReady && mapRef.current && (
         <MapLibreGeoRenderer
           map={mapRef.current}
