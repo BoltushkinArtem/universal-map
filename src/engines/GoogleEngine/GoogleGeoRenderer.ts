@@ -12,7 +12,6 @@ interface GoogleGeoRendererProps {
   savedGeoData: GeoData;
   /** URL иконки маркера (опционально) */
   markerIconUrl?: string;
-
   /** Ссылки на маркеры точек */
   pointMarkersRef: React.MutableRefObject<Map<string, google.maps.Marker>>;
   /** Ссылки на полилинии */
@@ -21,9 +20,9 @@ interface GoogleGeoRendererProps {
   polylineVertexMarkersRef: React.MutableRefObject<Map<string, google.maps.Marker[]>>;
 }
 
-/**
- * Создает иконку для вершины полилинии
- * @param size размер иконки в пикселях
+/** 
+ * Функция создания иконки для вершины полилинии.
+ * @param size размер иконки в пикселях (по умолчанию 10)
  * @returns объект конфигурации иконки Google Maps
  */
 const VERTEX_ICON = (size = 10) => ({
@@ -37,7 +36,8 @@ const VERTEX_ICON = (size = 10) => ({
 });
 
 /**
- * Компонент GoogleGeoRenderer — рендерит точки, полилинии и вершины на карте Google
+ * Компонент рендеринга геоданных на карте Google.
+ * Обрабатывает точки и линии, синхронизирует маркеры и полилинии с текущими данными.
  */
 export const GoogleGeoRenderer = ({
   map,
@@ -51,7 +51,7 @@ export const GoogleGeoRenderer = ({
   useEffect(() => {
     if (!map) return;
 
-    // Объединяем сохранённые и временные геоданные и нормализуем
+    // --- Объединяем сохранённые и временные данные и нормализуем их ---
     const allGeo = normalizeGeoData({
       type: "FeatureCollection",
       features: [...(savedGeoData.features ?? []), ...(tempGeoData.features ?? [])],
@@ -69,11 +69,12 @@ export const GoogleGeoRenderer = ({
       }
     });
 
-    // Добавляем новые маркеры
+    // Добавляем или обновляем маркеры
     points.forEach(f => {
       const id = f.properties.id;
+      const [lng, lat] = f.geometry.coordinates as [number, number];
+
       if (!pointMarkersRef.current.has(id)) {
-        const [lng, lat] = f.geometry.coordinates as [number, number];
         const marker = new google.maps.Marker({
           position: new google.maps.LatLng(lat, lng),
           map,
@@ -82,16 +83,18 @@ export const GoogleGeoRenderer = ({
             : undefined,
         });
         pointMarkersRef.current.set(id, marker);
+      } else {
+        pointMarkersRef.current.get(id)!.setPosition(new google.maps.LatLng(lat, lng));
       }
     });
 
-    // --- Рендер полилиний и вершин ---
+    // --- Рендер полилиний и их вершин ---
     const lines = allGeo.features.filter(
       f => f.properties.type === "polyline" && f.geometry.type === "LineString"
     );
     const lineIds = new Set(lines.map(f => f.properties.id));
 
-    // Удаляем устаревшие полилинии и вершины
+    // Удаляем устаревшие полилинии и маркеры вершин
     Array.from(polylinesRef.current.keys()).forEach(id => {
       if (!lineIds.has(id)) {
         polylinesRef.current.get(id)?.setMap(null);
@@ -102,12 +105,13 @@ export const GoogleGeoRenderer = ({
       }
     });
 
-    // Добавляем новые полилинии и вершины
+    // Добавляем или обновляем полилинии и вершины
     lines.forEach(line => {
       const id = line.properties.id;
       const coords = line.geometry.coordinates as [number, number][];
       const path = coords.map(([lng, lat]) => new google.maps.LatLng(lat, lng));
 
+      // Обновляем или создаём полилинию
       let polyline = polylinesRef.current.get(id);
       if (!polyline) {
         polyline = new google.maps.Polyline({
@@ -122,8 +126,18 @@ export const GoogleGeoRenderer = ({
         polyline.setPath(path);
       }
 
-      // Обновление или создание маркеров вершин
+      // Обновляем или создаём маркеры вершин
       let markers = polylineVertexMarkersRef.current.get(id) || [];
+
+      // Удаляем лишние маркеры, если координат стало меньше
+      if (markers.length > coords.length) {
+        for (let i = coords.length; i < markers.length; i++) {
+          markers[i].setMap(null);
+        }
+        markers = markers.slice(0, coords.length);
+      }
+
+      // Добавляем новые маркеры для новых координат
       for (let i = markers.length; i < coords.length; i++) {
         const [lng, lat] = coords[i];
         markers.push(
@@ -135,6 +149,7 @@ export const GoogleGeoRenderer = ({
           })
         );
       }
+
       polylineVertexMarkersRef.current.set(id, markers);
     });
   }, [map, tempGeoData, savedGeoData, markerIconUrl]);
