@@ -1,6 +1,8 @@
 import React, { FC, useEffect, useRef, useState } from "react";
 import styles from "./YandexEngine.module.scss";
 import { DrawActionType } from "../drawActionType";
+import { GeoData } from "../geoDataType";
+import { updateGeoData } from "../../utils/updateGeoData";
 
 declare global {
     interface Window {
@@ -44,66 +46,52 @@ interface YandexEngineProps {
 const DEFAULT_CENTER: [number, number] = [55.7558, 37.6173];
 const DEFAULT_ZOOM = 10;
 
-const YandexEngine: FC<YandexEngineProps> = ({ providerId, drawActionType, markerIconUrl }) => {
+const YandexEngine: FC<YandexEngineProps> = ({
+    providerId,
+    drawActionType,
+    markerIconUrl,
+}) => {
     const containerRef = useRef<HTMLDivElement | null>(null);
     const mapRef = useRef<any>(null);
-    const markersRef = useRef<any[]>([]);
+
+    // Map<id, geoObject | {main, squares}>
+    const objectsRef = useRef<Record<string, any>>({});
+
     const drawActionRef = useRef(drawActionType);
-    const nextIdRef = useRef(1);
     const styleTagRef = useRef<HTMLStyleElement | null>(null);
     const containerIdRef = useRef<string | null>(null);
 
-    const [geoData, setGeoData] = useState<GeoJSON.FeatureCollection | undefined>();
+    const [geoData, setGeoData] = useState<GeoData | undefined>();
 
     const handleClick = (e: any) => {
         const coords: [number, number] = e.get("coords");
+        const action = drawActionRef.current;
+        if (!action) return;
 
-        if (drawActionRef.current === DrawActionType.MARKER) {
-            const newMarker: GeoJSON.Feature<GeoJSON.Point> = {
-                type: "Feature",
-                geometry: { type: "Point", coordinates: coords },
-                properties: { id: nextIdRef.current++, type: "marker" },
-            };
-            setGeoData((prev) => ({
-                type: "FeatureCollection",
-                features: [...(prev?.features || []), newMarker],
-            }));
-        }
-
-        if (drawActionRef.current === DrawActionType.POLYLINE) {
-            setGeoData((prev) => {
-                const features = prev?.features || [];
-                const lastIndex = features.findIndex(
-                    (f) => f.properties?.id === "active-polyline" && f.geometry.type === "LineString"
-                );
-
-                const coordsArray =
-                    lastIndex !== -1
-                        ? [...(features[lastIndex].geometry as GeoJSON.LineString).coordinates, coords]
-                        : [coords];
-
-                const newPolyline: GeoJSON.Feature<GeoJSON.LineString> = {
-                    type: "Feature",
-                    geometry: { type: "LineString", coordinates: coordsArray },
-                    properties: { id: "active-polyline", type: "polyline" },
-                };
-
-                const updatedFeatures = features.filter((f) => f.properties?.id !== "active-polyline");
-                return { type: "FeatureCollection", features: [...updatedFeatures, newPolyline] };
-            });
-        }
+        setGeoData((prev) =>
+            updateGeoData(
+                { type: "FeatureCollection", features: [...(prev?.features || [])] },
+                coords,
+                action
+            )
+        );
     };
 
     useEffect(() => {
         drawActionRef.current = drawActionType;
     }, [drawActionType]);
 
+    // --- init map ---
     useEffect(() => {
         const apiKey = (import.meta.env as any).VITE_YANDEX_API_KEY;
         if (!apiKey || !containerRef.current) return;
 
         if (!containerIdRef.current) {
-            containerIdRef.current = `yandex-map-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+            containerIdRef.current =
+                "yandex-map-" +
+                Date.now() +
+                "-" +
+                Math.random().toString(36).slice(2);
             containerRef.current.id = containerIdRef.current;
         }
 
@@ -134,13 +122,11 @@ const YandexEngine: FC<YandexEngineProps> = ({ providerId, drawActionType, marke
                 map.setType(mapType);
 
                 if (!(map as any)._clickHandler) {
-
-
                     map.events.add("click", handleClick);
                     (map as any)._clickHandler = handleClick;
                 }
-            } catch (error) {
-                console.error("Yandex Maps initialization error:", error);
+            } catch (e) {
+                console.error("Yandex Maps initialization error:", e);
             }
         };
 
@@ -156,63 +142,121 @@ const YandexEngine: FC<YandexEngineProps> = ({ providerId, drawActionType, marke
         };
     }, [providerId, markerIconUrl]);
 
+    // --- smart rendering without blinking ---
     useEffect(() => {
         const map = mapRef.current;
         if (!map || !geoData) return;
 
-        markersRef.current.forEach((m) => map.geoObjects.remove(m));
-        markersRef.current = [];
+        const store = objectsRef.current;
+        const existingFeatureIds = new Set(Object.keys(store));
 
         geoData.features.forEach((feature) => {
-            if (feature.geometry.type === "Point") {
-                const placemark = new window.ymaps.Placemark(
-                    feature.geometry.coordinates,
-                    {},
-                    {
-                        iconLayout: "default#image",
-                        iconImageHref: markerIconUrl || "https://maps.google.com/mapfiles/ms/icons/red-dot.png",
-                        iconImageSize: [32, 32],
-                        draggable: true,
+            const id = feature.properties.id;
+
+            // ----- если объект уже существует -----
+            if (store[id]) {
+                existingFeatureIds.delete(id);
+
+                if (feature.geometry.type === "LineString") {
+                    const item = store[id];
+
+                    // обновляем координаты линии
+                    item.main.geometry.setCoordinates(feature.geometry.coordinates);
+
+                    // обновляем квадраты без удаления
+                    const coords = feature.geometry.coordinates;
+                    if (item.squares.length < coords.length) {
+                        // добавить недостающие квадраты
+                        for (let i = item.squares.length; i < coords.length; i++) {
+                            const sq = new window.ymaps.Placemark([0, 0], {}, {
+                                iconLayout: "default#image",
+                                iconImageHref:
+                                    "data:image/svg+xml;charset=UTF-8," +
+                                    encodeURIComponent(`
+                                        <svg xmlns="http://www.w3.org/2000/svg" width="10" height="10">
+                                            <rect width="10" height="10" fill="white" stroke="black" stroke-width="1"/>
+                                        </svg>
+                                    `),
+                                iconImageSize: [10, 10],
+                                iconImageOffset: [-5, -5],
+                                draggable: false,
+                            });
+                            map.geoObjects.add(sq);
+                            item.squares.push(sq);
+                        }
                     }
-                );
-                map.geoObjects.add(placemark);
-                markersRef.current.push(placemark);
+                    // обновляем координаты всех квадратов
+                    coords.forEach((coord, i) => {
+                        item.squares[i].geometry.setCoordinates(coord);
+                    });
+                }
+
+                return;
+            }
+
+            // ----- создание новых объектов -----
+            if (feature.geometry.type === "Point") {
+                const obj = new window.ymaps.Placemark(feature.geometry.coordinates, {}, {
+                    iconLayout: "default#image",
+                    iconImageHref:
+                        markerIconUrl ||
+                        "https://maps.google.com/mapfiles/ms/icons/red-dot.png",
+                    iconImageSize: [32, 32],
+                    draggable: true,
+                });
+                store[id] = obj;
+                map.geoObjects.add(obj);
+                existingFeatureIds.delete(id);
+                return;
             }
 
             if (feature.geometry.type === "LineString") {
-                const polyline = new window.ymaps.Polyline(
-                    feature.geometry.coordinates,
-                    {},
-                    { strokeColor: "#FF0000", strokeWidth: 3, strokeOpacity: 1 }
-                );
-                map.geoObjects.add(polyline);
-                markersRef.current.push(polyline);
-
-                (feature.geometry.coordinates as [number, number][]).forEach((coord) => {
-                    const squarePlacemark = new window.ymaps.Placemark(
-                        coord,
-                        {},
-                        {
-                            iconLayout: "default#image",
-                            iconImageHref:
-                                'data:image/svg+xml;charset=UTF-8,' +
-                                encodeURIComponent(`
-                  <svg xmlns="http://www.w3.org/2000/svg" width="10" height="10">
-                    <rect width="10" height="10" fill="white" stroke="black" stroke-width="1"/>
-                  </svg>
-                `),
-                            iconImageSize: [10, 10],
-                            iconImageOffset: [-5, -5],
-                            draggable: false,
-                        }
-                    );
-                    map.geoObjects.add(squarePlacemark);
-                    markersRef.current.push(squarePlacemark);
+                const poly = new window.ymaps.Polyline(feature.geometry.coordinates, {}, {
+                    strokeColor: "#FF0000",
+                    strokeWidth: 3,
+                    strokeOpacity: 1,
                 });
+
+                const squares = feature.geometry.coordinates.map((coord) => {
+                    return new window.ymaps.Placemark(coord, {}, {
+                        iconLayout: "default#image",
+                        iconImageHref:
+                            "data:image/svg+xml;charset=UTF-8," +
+                            encodeURIComponent(`
+                                <svg xmlns="http://www.w3.org/2000/svg" width="10" height="10">
+                                    <rect width="10" height="10" fill="white" stroke="black" stroke-width="1"/>
+                                </svg>
+                            `),
+                        iconImageSize: [10, 10],
+                        iconImageOffset: [-5, -5],
+                        draggable: false,
+                    });
+                });
+
+                store[id] = { main: poly, squares };
+                map.geoObjects.add(poly);
+                squares.forEach((sq) => map.geoObjects.add(sq));
+                existingFeatureIds.delete(id);
             }
+        });
+
+        // --- remove obsolete features ---
+        existingFeatureIds.forEach((id) => {
+            const item = store[id];
+            if (!item) return;
+
+            if (item.main && item.squares) {
+                map.geoObjects.remove(item.main);
+                item.squares.forEach((s: any) => map.geoObjects.remove(s));
+            } else {
+                map.geoObjects.remove(item);
+            }
+
+            delete store[id];
         });
     }, [geoData, markerIconUrl]);
 
+    // --- cursor update ---
     useEffect(() => {
         const container = containerRef.current;
         if (!container || !containerIdRef.current) return;
@@ -223,7 +267,11 @@ const YandexEngine: FC<YandexEngineProps> = ({ providerId, drawActionType, marke
             styleTagRef.current = styleTag;
         }
 
-        const cursorStyle = drawActionRef.current === DrawActionType.POLYLINE ? "crosshair" : "grab";
+        const cursorStyle =
+            drawActionRef.current === DrawActionType.POLYLINE
+                ? "crosshair"
+                : "grab";
+
         styleTagRef.current.innerHTML = `
       #${containerIdRef.current} .ymaps-2-1-79-map,
       #${containerIdRef.current} .ymaps-2-1-79-map * {
