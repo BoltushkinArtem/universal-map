@@ -1,4 +1,4 @@
-import React, { FC, useCallback, useEffect, useRef } from "react";
+import React, { FC, useCallback, useEffect, useRef, useState } from "react";
 import styles from "./YandexEngine.module.scss";
 import { DrawActionType } from "../drawActionType";
 import { GeoData } from "../geoDataType";
@@ -62,6 +62,8 @@ export const YandexEngine: FC<YandexEngineProps> = ({
     const styleTagRef = useRef<HTMLStyleElement | null>(null);
     const containerIdRef = useRef<string | null>(null);
 
+    const [mapLoaded, setMapLoaded] = useState(false); // <- состояние загрузки карты
+
     useEffect(() => {
         drawActionRef.current = drawActionType;
     }, [drawActionType]);
@@ -112,6 +114,8 @@ export const YandexEngine: FC<YandexEngineProps> = ({
                 const clickHandler = (e: any) => handleClick(e);
                 map.events.add("click", clickHandler);
 
+                setMapLoaded(true); // <- карта загружена
+
                 return () => map.events.remove("click", clickHandler);
             } catch (e) {
                 console.error("Yandex Maps init error:", e);
@@ -145,7 +149,7 @@ export const YandexEngine: FC<YandexEngineProps> = ({
     return (
         <>
             <div ref={containerRef} className={styles.mapContainer} />
-            {mapRef.current && (
+            {mapLoaded && mapRef.current && (
                 <YandexGeoRenderer
                     map={mapRef.current}
                     tempGeoData={tempGeoData}
