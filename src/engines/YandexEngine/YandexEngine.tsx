@@ -151,7 +151,7 @@ const YandexEngine: FC<YandexEngineProps> = ({
             styleTagRef.current = styleTag;
         }
 
-        const cursorStyle = drawActionRef.current === DrawActionType.POLYLINE ? "crosshair" : "grab";
+        const cursorStyle = drawActionRef.current ? "crosshair" : "grab";
 
         styleTagRef.current.innerHTML = `
       #${containerIdRef.current} .ymaps-2-1-79-map,
