@@ -3,13 +3,23 @@ import { GeoData, GeoFeature } from "../geoDataType";
 import { toYandexCoords } from "./utils/coordinateConverter";
 
 interface YandexGeoRendererProps {
+    /** Экземпляр карты Yandex */
     map: any;
+    /** Временные геоданные, создаваемые пользователем */
     tempGeoData: GeoData;
+    /** Сохраненные геоданные */
     savedGeoData?: GeoData;
+    /** URL иконки для маркеров */
     markerIconUrl?: string;
+    /** Ref для хранения созданных маркеров и полилиний */
     markersRef: React.MutableRefObject<Map<string, any>>;
 }
 
+/**
+ * Компонент рендерит геоданные на карте Yandex:
+ * - точки как маркеры
+ * - линии как полигоны с вершинными маркерами
+ */
 export const YandexGeoRenderer = ({
     map,
     tempGeoData,
@@ -18,14 +28,24 @@ export const YandexGeoRenderer = ({
     markersRef,
 }: YandexGeoRendererProps) => {
 
+    /**
+     * Типовая проверка линии
+     */
     const isLineFeature = (f: GeoFeature): f is GeoFeature & { geometry: { type: "LineString"; coordinates: [number, number][] } } =>
         f.geometry.type === "LineString";
 
+    /**
+     * Типовая проверка точки
+     */
     const isPointFeature = (f: GeoFeature): f is GeoFeature & { geometry: { type: "Point"; coordinates: [number, number] } } =>
         f.geometry.type === "Point";
 
+    /**
+     * Рендеринг точечных маркеров на карте
+     */
     const renderMarkers = useCallback(() => {
         if (!map) return;
+
         const allPoints = [...(savedGeoData?.features ?? []), ...tempGeoData.features].filter(isPointFeature);
         const newIds = new Set<string>();
 
@@ -57,11 +77,14 @@ export const YandexGeoRenderer = ({
                 markersRef.current.delete(id);
             }
         });
-
     }, [map, markerIconUrl, savedGeoData, tempGeoData, markersRef]);
 
+    /**
+     * Рендеринг линий и вершин на карте
+     */
     const renderLines = useCallback(() => {
         if (!map) return;
+
         const allLines = [...(savedGeoData?.features ?? []), ...tempGeoData.features].filter(isLineFeature);
 
         allLines.forEach((feature) => {
@@ -69,7 +92,6 @@ export const YandexGeoRenderer = ({
             if (!id) return;
 
             let item = markersRef.current.get(id);
-
             const coords = feature.geometry.coordinates.map(toYandexCoords);
 
             if (item) {
@@ -81,6 +103,7 @@ export const YandexGeoRenderer = ({
                     strokeWidth: 3,
                     strokeOpacity: 1,
                 });
+
                 const squares = coords.map((coord) => new window.ymaps.Placemark(coord, {}, {
                     iconLayout: "default#image",
                     iconImageHref: `data:image/svg+xml;charset=UTF-8,${encodeURIComponent(`
@@ -100,11 +123,17 @@ export const YandexGeoRenderer = ({
         });
     }, [map, savedGeoData, tempGeoData, markersRef]);
 
+    /**
+     * Рендеринг всех геоданных: линии и точки
+     */
     const renderGeoData = useCallback(() => {
         renderLines();
         renderMarkers();
     }, [renderLines, renderMarkers]);
 
+    /**
+     * Эффект, вызывающий рендер при изменении карты или геоданных
+     */
     useEffect(() => {
         if (!map) return;
         renderGeoData();

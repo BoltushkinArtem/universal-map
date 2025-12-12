@@ -14,6 +14,11 @@ declare global {
 }
 
 let yandexMapsPromise: Promise<void> | null = null;
+
+/**
+ * Загружает Yandex Maps API, если ещё не загружено.
+ * @param apiKey - API ключ для Yandex Maps
+ */
 const loadYandexMaps = (apiKey: string): Promise<void> => {
     if (yandexMapsPromise) return yandexMapsPromise;
 
@@ -47,6 +52,10 @@ interface YandexEngineProps {
 const DEFAULT_CENTER: [number, number] = [55.7558, 37.6173];
 const DEFAULT_ZOOM = 10;
 
+/**
+ * Компонент-обёртка для Yandex Maps.
+ * Управляет инициализацией карты, обработкой кликов и визуализацией геоданных.
+ */
 export const YandexEngine: FC<YandexEngineProps> = ({
     providerId,
     drawActionType,
@@ -62,12 +71,17 @@ export const YandexEngine: FC<YandexEngineProps> = ({
     const styleTagRef = useRef<HTMLStyleElement | null>(null);
     const containerIdRef = useRef<string | null>(null);
 
-    const [mapLoaded, setMapLoaded] = useState(false); // <- состояние загрузки карты
+    const [mapLoaded, setMapLoaded] = useState(false);
 
+    // Обновление текущего режима рисования
     useEffect(() => {
         drawActionRef.current = drawActionType;
     }, [drawActionType]);
 
+    /**
+     * Обработчик клика на карте
+     * @param e - событие клика Yandex Maps
+     */
     const handleClick = useCallback(
         (e: any) => {
             const coords: [number, number] = fromYandexCoords(e.get("coords"));
@@ -78,12 +92,13 @@ export const YandexEngine: FC<YandexEngineProps> = ({
         [tempGeoData, onUpdateGeoData]
     );
 
+    // Инициализация карты
     useEffect(() => {
         const apiKey = (import.meta.env as any).VITE_YANDEX_API_KEY;
         if (!apiKey || !containerRef.current) return;
 
         if (!containerIdRef.current) {
-            containerIdRef.current = "yandex-map-" + Date.now() + "-" + Math.random().toString(36).slice(2);
+            containerIdRef.current = `yandex-map-${Date.now()}-${Math.random().toString(36).slice(2)}`;
             containerRef.current.id = containerIdRef.current;
         }
 
@@ -114,7 +129,7 @@ export const YandexEngine: FC<YandexEngineProps> = ({
                 const clickHandler = (e: any) => handleClick(e);
                 map.events.add("click", clickHandler);
 
-                setMapLoaded(true); // <- карта загружена
+                setMapLoaded(true);
 
                 return () => map.events.remove("click", clickHandler);
             } catch (e) {
@@ -130,14 +145,17 @@ export const YandexEngine: FC<YandexEngineProps> = ({
         };
     }, [providerId, handleClick]);
 
+    // Обновление курсора карты в зависимости от режима рисования
     useEffect(() => {
         const container = containerRef.current;
         if (!container || !containerIdRef.current) return;
+
         if (!styleTagRef.current) {
             const styleTag = document.createElement("style");
             document.head.appendChild(styleTag);
             styleTagRef.current = styleTag;
         }
+
         styleTagRef.current.innerHTML = `
             #${containerIdRef.current} .ymaps-2-1-79-map,
             #${containerIdRef.current} .ymaps-2-1-79-map * {

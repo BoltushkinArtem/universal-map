@@ -2,41 +2,60 @@ import { DrawActionType } from "../engines/drawActionType";
 import { GeoData } from "../engines/geoDataType";
 import { normalizeGeoData } from "./geoDataNormalizer";
 
-const generateGuidWithTime = () => {
+/**
+ * Генерирует уникальный идентификатор с текущей временной меткой.
+ *
+ * @returns Строка, представляющая уникальный идентификатор с временной меткой
+ */
+const generateGuidWithTime = (): string => {
   const uuid = crypto.randomUUID();
-  const time = new Date().toISOString(); // с миллисекундами
-  return `${uuid}_${time}`;
+  const timestamp = new Date().toISOString();
+  return `${uuid}_${timestamp}`;
 };
 
+/**
+ * Обновляет GeoData в зависимости от действия рисования.
+ *
+ * - MARKER: добавляет новую точку на карту.
+ * - POLYLINE: добавляет точку в текущую временную линию или создаёт новую линию.
+ *
+ * @param previousGeoData - Текущие геоданные перед обновлением
+ * @param coordinates - Координаты новой точки в формате [longitude, latitude]
+ * @param drawAction - Тип действия рисования (MARKER, POLYLINE или undefined)
+ * @returns Обновлённые GeoData после применения действия рисования
+ */
 export function updateGeoData(
-  prev: GeoData | undefined,
-  coords: [number, number],
-  action: DrawActionType | undefined
+  previousGeoData: GeoData | undefined,
+  coordinates: [number, number],
+  drawAction: DrawActionType | undefined
 ): GeoData {
-  if (!action)
+  if (!drawAction) {
     return normalizeGeoData(
-      prev ?? { type: "FeatureCollection", features: [] }
+      previousGeoData ?? { type: "FeatureCollection", features: [] }
     );
+  }
 
-  const normalized = normalizeGeoData(
-    prev ?? { type: "FeatureCollection", features: [] }
+  const normalizedGeoData = normalizeGeoData(
+    previousGeoData ?? { type: "FeatureCollection", features: [] }
   );
 
-  const cloned: GeoData =
+  const geoDataClone: GeoData =
     typeof structuredClone === "function"
-      ? structuredClone(normalized)
-      : JSON.parse(JSON.stringify(normalized));
+      ? structuredClone(normalizedGeoData)
+      : JSON.parse(JSON.stringify(normalizedGeoData));
 
-  cloned.features = Array.isArray(cloned.features) ? cloned.features : [];
+  geoDataClone.features = Array.isArray(geoDataClone.features)
+    ? geoDataClone.features
+    : [];
 
-  if (action === DrawActionType.MARKER) {
+  if (drawAction === DrawActionType.MARKER) {
     const id = `marker-${generateGuidWithTime()}`;
 
-    cloned.features.push({
+    geoDataClone.features.push({
       type: "Feature",
       geometry: {
         type: "Point",
-        coordinates: coords,
+        coordinates,
       },
       properties: {
         id,
@@ -45,29 +64,28 @@ export function updateGeoData(
       },
     });
 
-    return cloned;
+    return geoDataClone;
   }
 
-  if (action === DrawActionType.POLYLINE) {
-    const tempLine = cloned.features
-      .slice()
+  if (drawAction === DrawActionType.POLYLINE) {
+    const tempLine = [...geoDataClone.features]
       .reverse()
       .find(
-        (f) =>
-          f.geometry?.type === "LineString" &&
-          f.properties?.isTemp
+        feature =>
+          feature.geometry?.type === "LineString" &&
+          feature.properties?.isTemp
       );
 
     if (tempLine && tempLine.geometry.type === "LineString") {
-      (tempLine.geometry.coordinates as [number, number][]).push(coords);
+      (tempLine.geometry.coordinates as [number, number][]).push(coordinates);
     } else {
       const id = `polyline-${generateGuidWithTime()}`;
 
-      cloned.features.push({
+      geoDataClone.features.push({
         type: "Feature",
         geometry: {
           type: "LineString",
-          coordinates: [coords],
+          coordinates: [coordinates],
         },
         properties: {
           id,
@@ -77,11 +95,8 @@ export function updateGeoData(
       });
     }
 
-    return cloned;
+    return geoDataClone;
   }
 
-  return cloned;
+  return geoDataClone;
 }
-
-
-

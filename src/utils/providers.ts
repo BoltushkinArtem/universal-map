@@ -1,5 +1,5 @@
 // Список доступных провайдеров карт
-export const PROVIDERS: { id: string; title: string }[] = [
+export const PROVIDERS: Array<{ id: string; title: string }> = [
   { id: "MapLibre_OSM", title: "OpenStreetMap (MapLibre)" },
   { id: "MapLibre_Mapbox", title: "Mapbox (via MapLibre)" },
   { id: "MapLibre_ArcGISAero", title: "ArcGIS Aero (MapLibre)" },
@@ -14,10 +14,11 @@ export const PROVIDERS: { id: string; title: string }[] = [
 
 /**
  * Возвращает массив URL шаблонов тайлов для выбранного провайдера.
+ *
  * @param providerId - идентификатор провайдера карт
+ * @returns Массив строк с URL шаблонами тайлов
  */
 export const tileTemplate = (providerId: string): string[] => {
-  // Получаем переменные окружения с токенами для Mapbox и Thunderforest
   const env = import.meta.env as Record<string, string | undefined>;
   const mapboxToken = env.VITE_MAPBOX_TOKEN ?? "";
   const thunderKey = env.VITE_OPENTRANSPORT_KEY ?? "";
@@ -51,7 +52,6 @@ export const tileTemplate = (providerId: string): string[] => {
       ];
 
     default:
-      // Для всех остальных провайдеров пока нет шаблонов тайлов
       return [];
   }
 };

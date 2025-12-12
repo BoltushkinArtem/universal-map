@@ -12,17 +12,26 @@ declare global {
   }
 }
 
+/** Props компонента GoogleEngine */
 interface GoogleEngineProps {
+  /** Идентификатор провайдера карты (GoogleSatellite или GoogleRoadmap) */
   providerId: string;
+  /** Текущий тип действия рисования */
   drawActionType?: DrawActionType;
+  /** URL иконки маркера */
   markerIconUrl?: string;
+  /** Временные геоданные для рендеринга */
   tempGeoData: GeoData;
+  /** Сохранённые геоданные для рендеринга */
   savedGeoData: GeoData;
+  /** Callback для обновления геоданных */
   onUpdateGeoData: (data: GeoData) => void;
 }
 
+/** Асинхронная загрузка Google Maps API */
 async function loadGoogleMaps(apiKey: string): Promise<typeof google> {
   if (window.google?.maps) return window.google;
+
   return new Promise<typeof google>((resolve, reject) => {
     const script = document.createElement("script");
     script.src = `https://maps.googleapis.com/maps/api/js?key=${apiKey}&v=weekly&libraries=geometry,places`;
@@ -34,6 +43,9 @@ async function loadGoogleMaps(apiKey: string): Promise<typeof google> {
   });
 }
 
+/** 
+ * Компонент GoogleEngine — отображает карту Google с поддержкой рисования и рендеринга геоданных
+ */
 const GoogleEngine: FC<GoogleEngineProps> = ({
   providerId,
   drawActionType,
@@ -42,32 +54,45 @@ const GoogleEngine: FC<GoogleEngineProps> = ({
   savedGeoData,
   onUpdateGeoData,
 }) => {
+  /** Контейнер для карты */
   const containerRef = useRef<HTMLDivElement | null>(null);
+  /** Ссылка на объект карты Google */
   const mapRef = useRef<google.maps.Map | null>(null);
 
+  /** Ссылки на маркеры точек */
   const pointMarkersRef = useRef<Map<string, google.maps.Marker>>(new Map());
+  /** Ссылки на полилинии */
   const polylinesRef = useRef<Map<string, google.maps.Polyline>>(new Map());
+  /** Ссылки на маркеры вершин полилиний */
   const polylineVertexMarkersRef = useRef<Map<string, google.maps.Marker[]>>(new Map());
 
+  /** Ссылка на слушатель клика по карте */
   const clickListenerRef = useRef<google.maps.MapsEventListener | null>(null);
+  /** Текущий тип действия рисования */
   const drawActionRef = useRef(drawActionType);
+  /** Временные геоданные */
   const tempGeoDataRef = useRef(tempGeoData);
 
+  /** Ссылка на тег <style> для курсора */
   const styleTagRef = useRef<HTMLStyleElement | null>(null);
+  /** ID контейнера карты */
   const containerIdRef = useRef<string | null>(null);
+
+  /** Состояние готовности карты */
   const [mapReady, setMapReady] = useState(false);
 
-  // --- Update refs ---
+  // --- Обновление ссылки на текущее действие рисования ---
   useEffect(() => {
     drawActionRef.current = drawActionType;
     updateCursor();
   }, [drawActionType]);
 
+  // --- Обновление временных геоданных ---
   useEffect(() => {
     tempGeoDataRef.current = tempGeoData;
   }, [tempGeoData]);
 
-  // --- Initialize map ---
+  // --- Инициализация карты Google ---
   useEffect(() => {
     const apiKey = (import.meta.env as any).VITE_GOOGLE_API_KEY;
     if (!apiKey || !containerRef.current) return;
@@ -91,9 +116,10 @@ const GoogleEngine: FC<GoogleEngineProps> = ({
           disableDefaultUI: true,
         });
 
-        // --- Карта готова
+        // Устанавливаем состояние готовности после полной загрузки карты
         google.maps.event.addListenerOnce(mapRef.current, "idle", () => setMapReady(true));
 
+        // Подписка на клик по карте
         clickListenerRef.current = mapRef.current.addListener("click", handleMapClick);
       } catch (e) {
         console.error("Google init failed", e);
@@ -108,9 +134,14 @@ const GoogleEngine: FC<GoogleEngineProps> = ({
     };
   }, [providerId]);
 
+  /**
+   * Обработчик клика по карте
+   * @param event Событие клика карты Google
+   */
   const handleMapClick = useCallback(
     (event: google.maps.MapMouseEvent) => {
       if (!event.latLng) return;
+
       const coords: [number, number] = [event.latLng.lng(), event.latLng.lat()];
       const updated = updateGeoData(
         normalizeGeoData(tempGeoDataRef.current),
@@ -122,6 +153,7 @@ const GoogleEngine: FC<GoogleEngineProps> = ({
     [onUpdateGeoData]
   );
 
+  /** Очистка карты и удаление всех элементов */
   const cleanupMap = () => {
     clickListenerRef.current?.remove();
     clickListenerRef.current = null;
@@ -138,6 +170,7 @@ const GoogleEngine: FC<GoogleEngineProps> = ({
     if (styleTagRef.current?.parentNode) styleTagRef.current.parentNode.removeChild(styleTagRef.current);
   };
 
+  /** Обновление курсора карты в зависимости от текущего действия */
   const updateCursor = () => {
     const containerId = containerIdRef.current;
     if (!containerId) return;
@@ -160,7 +193,7 @@ const GoogleEngine: FC<GoogleEngineProps> = ({
   return (
     <>
       <div ref={containerRef} className={styles.googleContainer} />
-      {mapReady && (
+      {mapReady && mapRef.current && (
         <GoogleGeoRenderer
           map={mapRef.current}
           tempGeoData={tempGeoData}

@@ -6,18 +6,39 @@ import { normalizeGeoData } from "../../utils/geoDataNormalizer";
 import { updateGeoData } from "../../utils/updateGeoData";
 import { ArcGISGeoRenderer } from "./ArcGISGeoRenderer";
 
+/** Координаты центра карты по умолчанию */
 const DEFAULT_CENTER: [number, number] = [37.6173, 55.7558];
+
+/** Масштаб карты по умолчанию */
 const DEFAULT_ZOOM = 10;
 
+/**
+ * Пропсы компонента ArcGISEngine
+ */
 interface ArcGISEngineProps {
+  /** Идентификатор провайдера ArcGIS */
   providerId: string;
+
+  /** Текущий режим рисования */
   drawActionType?: DrawActionType;
+
+  /** URL иконки маркера */
   markerIconUrl?: string;
+
+  /** Временные геоданные */
   tempGeoData: GeoData;
+
+  /** Сохранённые геоданные (опционально) */
   savedGeoData?: GeoData;
+
+  /** Колбэк при обновлении геоданных */
   onUpdateGeoData: (data: GeoData) => void;
 }
 
+/**
+ * ArcGISEngine — компонент для работы с ArcGIS картой.
+ * Обрабатывает инициализацию карты, клики пользователя и визуализацию фич.
+ */
 const ArcGISEngine: FC<ArcGISEngineProps> = ({
   providerId,
   drawActionType,
@@ -26,15 +47,27 @@ const ArcGISEngine: FC<ArcGISEngineProps> = ({
   savedGeoData,
   onUpdateGeoData,
 }) => {
+  /** Ссылка на контейнер карты */
   const containerRef = useRef<HTMLDivElement | null>(null);
+
+  /** Ссылка на MapView ArcGIS */
   const viewRef = useRef<__esri.MapView | null>(null);
+
+  /** Ссылка на слой графики ArcGIS */
   const graphicsLayerRef = useRef<__esri.GraphicsLayer | null>(null);
+
+  /** Ref текущего действия рисования */
   const drawActionRef = useRef(drawActionType);
 
+  /** Флаг готовности карты */
   const [mapReady, setMapReady] = useState(false);
 
+  /** Ref загруженных модулей ArcGIS */
   const esriModulesRef = useRef<any>({});
 
+  /**
+   * Обновление курсора и текущего действия рисования
+   */
   useEffect(() => {
     drawActionRef.current = drawActionType;
     if (containerRef.current) {
@@ -42,10 +75,14 @@ const ArcGISEngine: FC<ArcGISEngineProps> = ({
     }
   }, [drawActionType]);
 
+  /**
+   * Инициализация карты ArcGIS при смене провайдера
+   */
   useEffect(() => {
     let cancelled = false;
 
     const init = async () => {
+      // Подгрузка скриптов и стилей ArcGIS, если не загружены
       if (!(window as any).require) {
         const link = document.createElement("link");
         link.rel = "stylesheet";
@@ -119,6 +156,9 @@ const ArcGISEngine: FC<ArcGISEngineProps> = ({
     };
   }, [providerId]);
 
+  /**
+   * Обработка клика на карте для добавления точки или линии
+   */
   const handleMapClick = useCallback(
     (e: __esri.ViewClickEvent) => {
       const action = drawActionRef.current;
@@ -136,11 +176,14 @@ const ArcGISEngine: FC<ArcGISEngineProps> = ({
     [tempGeoData, onUpdateGeoData]
   );
 
+  /**
+   * Подписка на клики по карте после готовности карты
+   */
   useEffect(() => {
     const view = viewRef.current;
     if (!view || !mapReady) return;
-    const h = view.on("click", handleMapClick);
-    return () => h.remove();
+    const handler = view.on("click", handleMapClick);
+    return () => handler.remove();
   }, [mapReady, handleMapClick]);
 
   return (
