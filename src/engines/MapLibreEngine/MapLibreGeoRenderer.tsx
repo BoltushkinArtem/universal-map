@@ -1,24 +1,32 @@
-import { useEffect, useCallback } from "react";
+import { useEffect, useCallback, RefObject } from "react";
 import maplibregl, { GeoJSONSource, Map as MapLibreMap, LngLatLike } from "maplibre-gl";
 import { GeoData, GeoFeature } from "../geoDataType";
 import { normalizeGeoData } from "../../utils/geoDataNormalizer";
 
-/** Пропсы компонента MapLibreGeoRenderer */
+/**
+ * Props для компонента MapLibreGeoRenderer
+ */
 interface MapLibreGeoRendererProps {
-  /** Инстанс карты MapLibre */
+  /** Экземпляр карты MapLibre */
   map: MapLibreMap | null;
-  /** Временные геоданные, пока пользователь рисует */
+  /** Временные геоданные пользователя */
   tempGeoData: GeoData;
-  /** Сохранённые геоданные */
+  /** Сохранённые геоданные (опционально) */
   savedGeoData?: GeoData;
-  /** URL иконки для маркера */
+  /** URL иконки для точечных маркеров */
   markerIconUrl?: string;
   /** Ref для хранения маркеров по их id */
-  markersRef: React.MutableRefObject<Map<string, maplibregl.Marker>>;
+  markersRef: RefObject<Map<string, maplibregl.Marker>>;
 }
 
 /**
- * MapLibreGeoRenderer — компонент для отрисовки маркеров, линий и вершин на карте MapLibre
+ * MapLibreGeoRenderer — компонент для отрисовки маркеров, линий и вершин на карте MapLibre.
+ * 
+ * Логика:
+ * 1. Сначала отрисовываются линии и их вершины.
+ * 2. Затем рендерятся точечные маркеры.
+ *
+ * @param props - свойства компонента
  */
 export const MapLibreGeoRenderer = ({
   map,
@@ -28,43 +36,56 @@ export const MapLibreGeoRenderer = ({
   markersRef,
 }: MapLibreGeoRendererProps) => {
 
-  /** Проверка, что feature является линией */
+  /**
+   * Проверка, является ли feature линией (LineString)
+   * @param f - гео-фича
+   * @returns true, если feature является линией
+   */
   const isLineFeature = (f: GeoFeature): f is GeoFeature & { geometry: { type: "LineString"; coordinates: [number, number][] } } =>
     f.geometry.type === "LineString";
 
-  /** Проверка, что feature является точкой */
+  /**
+   * Проверка, является ли feature точкой (Point)
+   * @param f - гео-фича
+   * @returns true, если feature является точкой
+   */
   const isPointFeature = (f: GeoFeature): f is GeoFeature & { geometry: { type: "Point"; coordinates: [number, number] } } =>
     f.geometry.type === "Point";
 
   /**
-   * Рендер маркеров на карте
-   * Создаёт новые маркеры, обновляет позиции существующих и удаляет устаревшие
+   * Рендер точечных маркеров на карте MapLibre.
+   * - Добавляет новые маркеры.
+   * - Обновляет позиции существующих маркеров.
+   * - Удаляет устаревшие маркеры, которых больше нет в данных.
    */
   const renderMarkers = useCallback(() => {
-    if (!map) return;
+    if (!map || !markersRef.current) return;
 
     const normalizedSaved = normalizeGeoData(savedGeoData);
     const normalizedTemp = normalizeGeoData(tempGeoData);
 
+    // Собираем все точки (сохранённые + временные)
     const allPoints = [...normalizedSaved.features, ...normalizedTemp.features].filter(isPointFeature);
 
+    // Множество актуальных ID точек
     const newIds = new Set<string>();
 
     allPoints.forEach((feature) => {
       const id = feature.properties?.id?.toString();
       if (!id) return;
-
       newIds.add(id);
 
       let marker = markersRef.current.get(id);
       const [lng, lat] = feature.geometry.coordinates;
 
       if (marker) {
+        // Обновляем координаты существующего маркера, если изменились
         const curr = marker.getLngLat();
         if (curr.lng !== lng || curr.lat !== lat) {
           marker.setLngLat([lng, lat] as LngLatLike);
         }
       } else {
+        // Создаем новый DOM-элемент для маркера
         const el = document.createElement("div");
         el.className = "custom-marker";
         el.style.width = "32px";
@@ -73,11 +94,13 @@ export const MapLibreGeoRenderer = ({
         el.style.backgroundSize = "contain";
         el.style.backgroundRepeat = "no-repeat";
 
+        // Создаем маркер и добавляем его на карту
         marker = new maplibregl.Marker({ element: el }).setLngLat([lng, lat] as LngLatLike).addTo(map);
         markersRef.current.set(id, marker);
       }
     });
 
+    // Удаляем маркеры, которых больше нет в данных
     markersRef.current.forEach((marker, id) => {
       if (!newIds.has(id)) {
         marker.remove();
@@ -87,16 +110,18 @@ export const MapLibreGeoRenderer = ({
   }, [map, markerIconUrl, savedGeoData, tempGeoData, markersRef]);
 
   /**
-   * Основная функция рендеринга геоданных
-   * Отрисовывает линии, вершины линий и маркеры
+   * Рендер линий и вершин на карте MapLibre.
+   * - Создаёт/обновляет GeoJSON-слой с линиями.
+   * - Создаёт/обновляет GeoJSON-слой с вершинами линий.
    */
-  const renderGeoData = useCallback(() => {
+  const renderLines = useCallback(() => {
     if (!map) return;
 
     const normalizedSaved = normalizeGeoData(savedGeoData);
     const normalizedTemp = normalizeGeoData(tempGeoData);
     const allFeatures = [...normalizedSaved.features, ...normalizedTemp.features];
 
+    // Фильтруем только линии
     const lineFeatures = allFeatures.filter(isLineFeature);
 
     // --- Линии ---
@@ -109,6 +134,7 @@ export const MapLibreGeoRenderer = ({
         properties: f.properties ?? {},
       })),
     };
+
     if (map.getSource(lineSourceId)) {
       (map.getSource(lineSourceId) as GeoJSONSource).setData(lineCollection);
     } else if (lineFeatures.length > 0) {
@@ -122,7 +148,7 @@ export const MapLibreGeoRenderer = ({
     }
 
     // --- Вершины линий ---
-    const vertexFeatures: GeoJSON.Feature<GeoJSON.Point>[] = lineFeatures.flatMap(lf =>
+    const vertexFeatures: GeoJSON.Feature<GeoJSON.Point>[] = lineFeatures.flatMap((lf) =>
       lf.geometry.coordinates.map((coord, idx) => ({
         type: "Feature",
         geometry: { type: "Point", coordinates: coord as [number, number] },
@@ -135,6 +161,7 @@ export const MapLibreGeoRenderer = ({
       type: "FeatureCollection",
       features: vertexFeatures,
     };
+
     if (map.getSource(vertexSourceId)) {
       (map.getSource(vertexSourceId) as GeoJSONSource).setData(vertexCollection);
     } else if (vertexFeatures.length > 0) {
@@ -151,11 +178,21 @@ export const MapLibreGeoRenderer = ({
         },
       });
     }
+  }, [map, savedGeoData, tempGeoData]);
 
+  /**
+   * Основная функция рендеринга геоданных
+   * - Сначала линии и вершины
+   * - Затем точечные маркеры
+   */
+  const renderGeoData = useCallback(() => {
+    renderLines();
     renderMarkers();
-  }, [map, renderMarkers, savedGeoData, tempGeoData]);
+  }, [renderLines, renderMarkers]);
 
-  /** Авто-рендер геоданных при изменении карты или геоданных */
+  /**
+   * Эффект для авто-рендера геоданных при изменении карты или данных
+   */
   useEffect(() => {
     if (!map) return;
     renderGeoData();
