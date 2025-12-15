@@ -1,144 +1,162 @@
 import { useEffect, useRef, useState } from "react";
+import { MapConfig } from "../../mapConfig";
+import { toYandexCoords } from "../utils/coordinateConverter";
 
 declare global {
-  interface Window {
-    ymaps?: any;
-  }
+    interface Window {
+        ymaps?: any;
+    }
 }
 
 /**
  * Хранит Promise загрузки Yandex Maps API.
- * Используется для того, чтобы API загружалось только один раз.
+ * Используется, чтобы API загружался только один раз за сессию.
  */
 let yandexMapsPromise: Promise<void> | null = null;
 
 /**
- * Загружает Yandex Maps API один раз.
+ * Асинхронная загрузка Yandex Maps API один раз.
  *
  * @param apiKey - API ключ для Yandex Maps
- * @returns Promise, который резолвится, когда ymaps.ready выполнено
+ * @returns Promise<void> — резолвится после ymaps.ready
  */
 const loadYandexMaps = (apiKey: string): Promise<void> => {
-  if (yandexMapsPromise) return yandexMapsPromise;
+    if (yandexMapsPromise) return yandexMapsPromise;
 
-  yandexMapsPromise = new Promise((resolve, reject) => {
-    if (window.ymaps && window.ymaps.ready) {
-      window.ymaps.ready(resolve);
-      return;
-    }
+    yandexMapsPromise = new Promise((resolve, reject) => {
+        if (window.ymaps && window.ymaps.ready) {
+            window.ymaps.ready(resolve);
+            return;
+        }
 
-    const script = document.createElement("script");
-    script.src = `https://api-maps.yandex.ru/2.1/?apikey=${apiKey}&lang=ru_RU`;
-    script.async = true;
+        const script = document.createElement("script");
+        script.src = `https://api-maps.yandex.ru/2.1/?apikey=${apiKey}&lang=ru_RU`;
+        script.async = true;
 
-    script.onload = () => window.ymaps?.ready(resolve);
-    script.onerror = () => reject(new Error("Failed to load Yandex Maps API"));
+        script.onload = () => window.ymaps?.ready(resolve);
+        script.onerror = () => reject(new Error("Failed to load Yandex Maps API"));
 
-    document.head.appendChild(script);
-  });
+        document.head.appendChild(script);
+    });
 
-  return yandexMapsPromise;
+    return yandexMapsPromise;
 };
 
 /**
- * Хук инициализации Yandex Map.
- *
- * Отвечает за:
- * 1. Загрузку Yandex Maps API
- * 2. Создание экземпляра карты
- * 3. Присвоение уникального ID контейнеру (для локальных стилей)
- * 4. Очистку карты при размонтировании компонента
- *
- * @param containerRef - Ref на DOM-элемент контейнера карты
- * @param providerId - Тип карты ("YandexSatellite" | "YandexHybrid" | "YandexMap")
- * @returns Объект с mapRef (экземпляр карты), containerIdRef (ID контейнера) и mapLoaded (флаг готовности)
+ * Пропсы хука useYandexMapInit
  */
-export const useYandexMapInit = (
-  containerRef: React.RefObject<HTMLDivElement>,
-  providerId: string
-) => {
-  /** Ref для хранения экземпляра Yandex Map */
-  const mapRef = useRef<any>(null);
+interface UseYandexMapInitProps {
+    /** Ref на DOM-контейнер карты */
+    containerRef: React.RefObject<HTMLDivElement>;
+    /** Тип карты: YandexMap | YandexSatellite | YandexHybrid */
+    providerId: string;
+    /** Конфигурация карты: центр и zoom */
+    mapConfig: MapConfig;
+}
 
-  /** Ref для хранения уникального ID контейнера карты */
-  const containerIdRef = useRef<string | null>(null);
+/**
+ * useYandexMapInit — хук инициализации Yandex Map.
+ *
+ * Логика:
+ * 1. Загружает Yandex Maps API (один раз на сессию).
+ * 2. Создает экземпляр карты в containerRef.
+ * 3. Присваивает уникальный ID контейнеру для локальных стилей/селектора.
+ * 4. Управляет жизненным циклом карты и её очисткой при размонтировании.
+ *
+ * @param props.containerRef - ref на DOM контейнер
+ * @param props.providerId - тип карты
+ * @param props.mapConfig - центр и zoom карты
+ * @returns {object} { mapRef, containerIdRef, mapLoaded }
+ */
+export const useYandexMapInit = ({
+    containerRef,
+    providerId,
+    mapConfig,
+}: UseYandexMapInitProps) => {
+    /** Ref на экземпляр Yandex Map */
+    const mapRef = useRef<any>(null);
 
-  /** Флаг готовности карты */
-  const [mapLoaded, setMapLoaded] = useState(false);
+    /** Ref с уникальным ID контейнера карты */
+    const containerIdRef = useRef<string | null>(null);
 
-  useEffect(() => {
-    if (!containerRef.current) return;
+    /** Флаг готовности карты */
+    const [mapLoaded, setMapLoaded] = useState(false);
 
-    // Генерируем уникальный ID контейнера, если ещё не создан
-    if (!containerIdRef.current) {
-      containerIdRef.current = `yandex-map-${Date.now()}-${Math.random()
-        .toString(36)
-        .slice(2)}`;
-      containerRef.current.id = containerIdRef.current;
-    }
+    useEffect(() => {
+        if (!containerRef.current) return;
 
-    /** Флаг, чтобы игнорировать изменения после размонтирования */
-    let isUnmounted = false;
+        // Генерация уникального ID контейнера один раз
+        if (!containerIdRef.current) {
+            containerIdRef.current = `yandex-map-${Date.now()}-${Math.random()
+                .toString(36)
+                .slice(2)}`;
+            containerRef.current.id = containerIdRef.current;
+        }
 
-    /** Получаем API ключ из переменных окружения */
-    const apiKey = (import.meta.env as any).VITE_YANDEX_API_KEY;
-    if (!apiKey) {
-      console.error("Yandex API key is missing");
-      return;
-    }
+        /** Флаг для игнорирования изменений после размонтирования */
+        let isUnmounted = false;
 
-    /**
-     * Инициализация карты
-     */
-    const initMap = async () => {
-      try {
-        // Загружаем Yandex Maps API
-        await loadYandexMaps(apiKey);
+        /** Получение API ключа из переменных окружения */
+        const apiKey = (import.meta.env as any).VITE_YANDEX_API_KEY;
+        if (!apiKey) {
+            console.error("Yandex API key is missing");
+            return;
+        }
 
-        if (isUnmounted || !containerRef.current) return;
+        /**
+         * Инициализация карты Yandex
+         */
+        const initMap = async () => {
+            try {
+                // Загружаем Yandex Maps API
+                await loadYandexMaps(apiKey);
 
-        // Определяем тип карты в зависимости от providerId
-        const mapType =
-          providerId === "YandexSatellite"
-            ? "yandex#satellite"
-            : providerId === "YandexHybrid"
-            ? "yandex#hybrid"
-            : "yandex#map";
+                if (isUnmounted || !containerRef.current) return;
 
-        // Создаём карту, если ещё не создана
-        const map =
-          mapRef.current ||
-          new window.ymaps.Map(containerRef.current, {
-            center: [55.7558, 37.6173], // Москва по умолчанию
-            zoom: 10,
-            type: mapType,
-            controls: [], // убираем стандартные контролы
-          });
+                // Определяем тип карты в зависимости от providerId
+                const mapType =
+                    providerId === "YandexSatellite"
+                        ? "yandex#satellite"
+                        : providerId === "YandexHybrid"
+                            ? "yandex#hybrid"
+                            : "yandex#map";
 
-        mapRef.current = map;
-        map.setType(mapType);
+                // Создаём карту, если ещё не создана
+                const map =
+                    mapRef.current ||
+                    new window.ymaps.Map(containerRef.current, {
+                        center: toYandexCoords([mapConfig.center.lng, mapConfig.center.lat]),
+                        zoom: mapConfig.zoom,
+                        type: mapType,
+                        controls: [], // убираем стандартные контролы
+                    });
 
-        setMapLoaded(true);
-      } catch (err) {
-        console.error("Failed to initialize Yandex Map:", err);
-      }
+                mapRef.current = map;
+                map.setType(mapType);
+
+                // Устанавливаем флаг готовности карты
+                setMapLoaded(true);
+            } catch (err) {
+                console.error("Failed to initialize Yandex Map:", err);
+            }
+        };
+
+        initMap();
+
+        /** Очистка карты при размонтировании */
+        return () => {
+            isUnmounted = true;
+            if (mapRef.current) {
+                mapRef.current.destroy?.();
+                mapRef.current = null;
+            }
+        };
+    }, [containerRef, providerId, mapConfig]);
+
+    // Возвращаем реф карты, ID контейнера и флаг готовности
+    return {
+        mapRef,
+        containerIdRef,
+        mapLoaded,
     };
-
-    initMap();
-
-    /** Очистка карты при размонтировании компонента */
-    return () => {
-      isUnmounted = true;
-      if (mapRef.current) {
-        mapRef.current.destroy?.();
-        mapRef.current = null;
-      }
-    };
-  }, [containerRef, providerId]);
-
-  return {
-    mapRef,
-    containerIdRef,
-    mapLoaded,
-  };
 };
