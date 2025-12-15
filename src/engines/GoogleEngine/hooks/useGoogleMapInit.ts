@@ -1,15 +1,9 @@
 import { useEffect, useCallback, useRef, useState, RefObject } from "react";
-import { DrawActionType } from "../../drawActionType";
 import { MapConfig } from "../../mapConfig";
-
-declare global {
-    interface Window {
-        google: typeof google;
-    }
-}
+import { getProviderSrc } from "../../../utils/providers";
 
 /**
- * Пропсы хука useGoogleMapInit
+ * Тип пропсов для хука useGoogleMapInit.
  */
 interface UseGoogleMapInitProps {
     /** Идентификатор провайдера карты: "GoogleSatellite" | "GoogleRoadmap" */
@@ -37,21 +31,22 @@ interface UseGoogleMapInitProps {
     onMapReady?: (map: google.maps.Map) => void;
 }
 
+declare global {
+    interface Window {
+        google: typeof google;
+    }
+}
+
 /**
- * useGoogleMapInit — хук инициализации карты Google.
+ * useGoogleMapInit — хук инициализации Google Maps.
  *
  * Основные обязанности:
  * 1. Асинхронная загрузка Google Maps JS API, если он ещё не загружен.
  * 2. Создание экземпляра google.maps.Map в переданном контейнере.
- * 3. Управление "чисткой" карты: удаление слушателей клика, маркеров, полилиний и т.п.
+ * 3. Управление очисткой карты: удаление слушателей клика, маркеров, полилиний и т.п.
  * 4. Генерация уникального id контейнера (для локального CSS, курсора и т.п.).
  *
- * @param props.containerRef - ref контейнера, в котором создаётся карта
- * @param props.providerId - идентификатор провайдера (определяет basemap)
- * @param props.pointMarkersRef - ref контейнера маркеров точек
- * @param props.polylinesRef - ref контейнера полилиний
- * @param props.polylineVertexMarkersRef - ref контейнера маркеров вершин
- * @param props.onMapReady - опциональный callback при готовности карты
+ * @param props - объект пропсов
  * @returns mapRef, mapReady, containerIdRef, styleTagRef, clickListenerRef
  */
 export const useGoogleMapInit = ({
@@ -75,7 +70,7 @@ export const useGoogleMapInit = ({
     /** Флаг готовности карты (true после события 'idle') */
     const [mapReady, setMapReady] = useState<boolean>(false);
 
-    /** Ref на слушатель клика карты (если понадобится для удаления) */
+    /** Ref на слушатель клика карты (для возможного удаления) */
     const clickListenerRef = useRef<google.maps.MapsEventListener | null>(null);
 
     /**
@@ -88,20 +83,25 @@ export const useGoogleMapInit = ({
      * - динамически созданный <style>.
      */
     const cleanupMap = useCallback(() => {
+        // Удаляем слушатель клика, если он был
         clickListenerRef.current?.remove();
         clickListenerRef.current = null;
 
+        // Удаляем маркеры точек с карты и очищаем Map
         pointMarkersRef.current?.forEach((marker) => marker.setMap(null));
         pointMarkersRef.current?.clear();
 
+        // Удаляем все полилинии с карты и очищаем Map
         polylinesRef.current?.forEach((polyline) => polyline.setMap(null));
         polylinesRef.current?.clear();
 
+        // Удаляем маркеры вершин полилиний и очищаем Map
         polylineVertexMarkersRef.current?.forEach((markers) =>
             markers.forEach((marker) => marker.setMap(null))
         );
         polylineVertexMarkersRef.current?.clear();
 
+        // Удаляем динамический <style> из DOM
         if (styleTagRef.current?.parentNode) {
             styleTagRef.current.parentNode.removeChild(styleTagRef.current);
             styleTagRef.current = null;
@@ -109,15 +109,16 @@ export const useGoogleMapInit = ({
     }, [pointMarkersRef, polylinesRef, polylineVertexMarkersRef]);
 
     /**
-     * Эффект инициализации Google Maps.
+     * Эффект инициализации Google Maps:
      * - Создаёт уникальный ID контейнера (если ещё не создан)
      * - Загружает Google Maps API
      * - Создаёт экземпляр карты и подписывается на событие 'idle'
      */
     useEffect(() => {
-        const apiKey = (import.meta.env as any).VITE_GOOGLE_API_KEY;
-        if (!apiKey || !containerRef.current) return;
+        const src = getProviderSrc(providerId);
+        if (!src?.length || !containerRef.current) return;
 
+        // Генерация уникального ID для контейнера
         if (!containerIdRef.current) {
             containerIdRef.current = `google-map-${Date.now()}-${Math.random()
                 .toString(36)
@@ -135,7 +136,7 @@ export const useGoogleMapInit = ({
 
             return new Promise<typeof google>((resolve, reject) => {
                 const script = document.createElement("script");
-                script.src = `https://maps.googleapis.com/maps/api/js?key=${apiKey}&v=weekly&libraries=geometry,places`;
+                script.src = src;
                 script.async = true;
                 script.defer = true;
                 script.onload = () => resolve(window.google);
@@ -152,6 +153,7 @@ export const useGoogleMapInit = ({
                 const google = await loadGoogleMaps();
                 if (cancelled || !containerRef.current) return;
 
+                // Создание карты Google
                 mapRef.current = new google.maps.Map(containerRef.current, {
                     center: { lat: mapConfig.center.lat, lng: mapConfig.center.lng },
                     zoom: mapConfig.zoom,
@@ -159,6 +161,7 @@ export const useGoogleMapInit = ({
                     disableDefaultUI: true,
                 });
 
+                // Событие 'idle' — карта полностью готова к использованию
                 google.maps.event.addListenerOnce(mapRef.current, "idle", () => {
                     setMapReady(true);
                     onMapReady?.(mapRef.current!);
@@ -170,11 +173,13 @@ export const useGoogleMapInit = ({
 
         initMap();
 
+        // Очистка при размонтировании или изменении зависимостей
         return () => {
             cancelled = true;
             cleanupMap();
         };
-    }, [containerRef, providerId, cleanupMap, onMapReady]);
+    }, [containerRef, providerId, mapConfig, cleanupMap, onMapReady]);
 
+    // Возвращаем ref'ы и состояние готовности карты
     return { mapRef, mapReady, containerIdRef, styleTagRef, clickListenerRef };
 };

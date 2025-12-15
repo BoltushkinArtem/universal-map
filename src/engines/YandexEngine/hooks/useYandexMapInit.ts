@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { MapConfig } from "../../mapConfig";
 import { toYandexCoords } from "../utils/coordinateConverter";
+import { getProviderSrc } from "../../../utils/providers";
 
 declare global {
     interface Window {
@@ -17,23 +18,28 @@ let yandexMapsPromise: Promise<void> | null = null;
 /**
  * Асинхронная загрузка Yandex Maps API один раз.
  *
- * @param apiKey - API ключ для Yandex Maps
+ * @param src - URL скрипта Yandex Maps API
  * @returns Promise<void> — резолвится после ymaps.ready
  */
-const loadYandexMaps = (apiKey: string): Promise<void> => {
+const loadYandexMaps = (src: string): Promise<void> => {
     if (yandexMapsPromise) return yandexMapsPromise;
 
     yandexMapsPromise = new Promise((resolve, reject) => {
+        // Если API уже загружено, ждём ymaps.ready
         if (window.ymaps && window.ymaps.ready) {
             window.ymaps.ready(resolve);
             return;
         }
 
+        // Создаем скрипт для загрузки Yandex Maps
         const script = document.createElement("script");
-        script.src = `https://api-maps.yandex.ru/2.1/?apikey=${apiKey}&lang=ru_RU`;
+        script.src = src;
         script.async = true;
 
+        // После загрузки вызываем ymaps.ready
         script.onload = () => window.ymaps?.ready(resolve);
+
+        // Обработка ошибок загрузки
         script.onerror = () => reject(new Error("Failed to load Yandex Maps API"));
 
         document.head.appendChild(script);
@@ -43,13 +49,15 @@ const loadYandexMaps = (apiKey: string): Promise<void> => {
 };
 
 /**
- * Пропсы хука useYandexMapInit
+ * Пропсы хука useYandexMapInit.
  */
 interface UseYandexMapInitProps {
     /** Ref на DOM-контейнер карты */
     containerRef: React.RefObject<HTMLDivElement>;
+
     /** Тип карты: YandexMap | YandexSatellite | YandexHybrid */
     providerId: string;
+
     /** Конфигурация карты: центр и zoom */
     mapConfig: MapConfig;
 }
@@ -58,7 +66,7 @@ interface UseYandexMapInitProps {
  * useYandexMapInit — хук инициализации Yandex Map.
  *
  * Логика:
- * 1. Загружает Yandex Maps API (один раз на сессию).
+ * 1. Загружает Yandex Maps API один раз за сессию.
  * 2. Создает экземпляр карты в containerRef.
  * 3. Присваивает уникальный ID контейнеру для локальных стилей/селектора.
  * 4. Управляет жизненным циклом карты и её очисткой при размонтировании.
@@ -96,10 +104,9 @@ export const useYandexMapInit = ({
         /** Флаг для игнорирования изменений после размонтирования */
         let isUnmounted = false;
 
-        /** Получение API ключа из переменных окружения */
-        const apiKey = (import.meta.env as any).VITE_YANDEX_API_KEY;
-        if (!apiKey) {
-            console.error("Yandex API key is missing");
+        const src = getProviderSrc(providerId);
+        if (!src?.length) {
+            console.error("Yandex API src is missing");
             return;
         }
 
@@ -109,7 +116,7 @@ export const useYandexMapInit = ({
         const initMap = async () => {
             try {
                 // Загружаем Yandex Maps API
-                await loadYandexMaps(apiKey);
+                await loadYandexMaps(src);
 
                 if (isUnmounted || !containerRef.current) return;
 
