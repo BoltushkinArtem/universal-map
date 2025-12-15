@@ -1,147 +1,116 @@
-import React, { FC, useEffect, useRef } from "react";
+import React, { FC, useRef } from "react";
 import styles from "./YandexEngine.module.scss";
+import { DrawActionType } from "../drawActionType";
+import { GeoData } from "../geoDataType";
+import { YandexGeoRenderer } from "./YandexGeoRenderer";
+import { useYandexMapCursor } from "./hooks/useYandexMapCursor";
+import { useYandexDrawHandler } from "./hooks/useYandexDrawHandler";
+import { useYandexMapInit } from "./hooks/useYandexMapInit";
+import { MapConfig } from "../mapConfig";
 
-declare global {
-  interface Window {
-    ymaps?: any;
-  }
-}
-
-// Глобальный промис для предотвращения повторной загрузки Яндекс.Карт
-let yandexMapsPromise: Promise<void> | null = null;
-
-/** Динамическая загрузка API Яндекс.Карт */
-const loadYandexMaps = (apiKey: string): Promise<void> => {
-  if (yandexMapsPromise) return yandexMapsPromise;
-
-  yandexMapsPromise = new Promise((resolve, reject) => {
-    if (window.ymaps && window.ymaps.ready) {
-      window.ymaps.ready(() => resolve());
-      return;
-    }
-
-    const script = document.createElement("script");
-    script.src = `https://api-maps.yandex.ru/2.1/?apikey=${apiKey}&lang=ru_RU`;
-    script.async = true;
-
-    script.onload = () => {
-      if (window.ymaps && window.ymaps.ready) {
-        window.ymaps.ready(() => resolve());
-      } else {
-        reject(new Error("Yandex Maps loaded but ymaps is undefined"));
-      }
-    };
-
-    script.onerror = () => reject(new Error("Failed to load Yandex Maps"));
-    document.head.appendChild(script);
-  });
-
-  return yandexMapsPromise;
-};
-
+/**
+ * Пропсы компонента YandexEngine
+ */
 interface YandexEngineProps {
-  providerId: string;
-  drawMarkerOn?: boolean;
-  markerIconUrl?: string;
+    /** Тип карты: YandexMap | YandexSatellite | YandexHybrid */
+    providerId: string;
+
+    /** Текущий режим рисования: Point или LineString */
+    drawActionType?: DrawActionType;
+
+    /** URL иконки маркера (по желанию) */
+    markerIconUrl?: string;
+
+    /** Конфигурация карты: центр и zoom */
+    mapConfig: MapConfig;
+
+    /** Временные геоданные для отображения */
+    tempGeoData: GeoData;
+
+    /** Сохранённые геоданные для отображения */
+    savedGeoData: GeoData;
+
+    /** Колбэк для обновления геоданных после действий пользователя */
+    onUpdateGeoData: (data: GeoData) => void;
 }
 
 /**
- * YandexEngine — компонент для отображения карты Яндекс с поддержкой маркеров.
+ * YandexEngine — компонент-обёртка для Yandex Maps.
+ *
+ * Ответственности:
+ * 1. Инициализация карты через useYandexMapInit.
+ * 2. Подключение обработчика кликов для рисования точек и линий через useYandexDrawHandler.
+ * 3. Управление курсором карты через useYandexMapCursor.
+ * 4. Рендер маркеров и линий через YandexGeoRenderer после готовности карты.
+ *
+ * Компонент только координирует работу карты и DOM-контейнера.
  */
 const YandexEngine: FC<YandexEngineProps> = ({
-  providerId,
-  drawMarkerOn = false,
-  markerIconUrl,
+    providerId,
+    drawActionType,
+    markerIconUrl,
+    mapConfig,
+    tempGeoData,
+    savedGeoData,
+    onUpdateGeoData,
 }) => {
-  const containerRef = useRef<HTMLDivElement | null>(null); // DOM-контейнер карты
-  const mapRef = useRef<any>(null); // Экземпляр карты
-  const markersRef = useRef<any[]>([]); // Добавленные маркеры
+    /**
+     * Ref на контейнер карты в DOM.
+     * Non-null assertion гарантирует, что элемент существует при инициализации карты.
+     */
+    const containerRef = useRef<HTMLDivElement>(null!);
 
-  useEffect(() => {
-    const apiKey = (import.meta.env as any).VITE_YANDEX_API_KEY;
-    if (!apiKey || !containerRef.current) {
-      console.error("VITE_YANDEX_API_KEY is not defined or container is missing");
-      return;
-    }
+    /**
+     * Ref для хранения всех маркеров по их ID.
+     * Позволяет управлять маркерами без пересоздания экземпляров.
+     */
+    const markersRef = useRef<Map<string, any>>(new Map());
 
-    let isUnmounted = false;
+    /**
+     * Инициализация карты Yandex через кастомный хук.
+     * Возвращает:
+     * - mapRef: Ref на экземпляр карты
+     * - containerIdRef: Ref с уникальным ID контейнера карты
+     * - mapLoaded: Флаг готовности карты к рендеру
+     */
+    const { mapRef, containerIdRef, mapLoaded } = useYandexMapInit({
+        containerRef,
+        providerId,
+        mapConfig,
+    });
 
-    const initializeMap = async () => {
-      try {
-        await loadYandexMaps(apiKey);
-        if (isUnmounted || !containerRef.current) return;
+    /**
+     * Подключение обработчика кликов на карте для режима рисования.
+     * Хук отвечает за:
+     * - добавление точек и линий в tempGeoData
+     * - вызов колбэка onUpdateGeoData
+     */
+    useYandexDrawHandler(mapRef, tempGeoData, drawActionType, onUpdateGeoData);
 
-        // Определяем тип карты в зависимости от провайдера
-        const mapType =
-          providerId === "YandexSatellite"
-            ? "yandex#satellite"
-            : providerId === "YandexHybrid"
-            ? "yandex#hybrid"
-            : "yandex#map";
+    /**
+     * Управление курсором контейнера карты:
+     * - "crosshair" при активном drawActionType
+     * - "grab" при отсутствии режима рисования
+     */
+    useYandexMapCursor(containerRef, containerIdRef, drawActionType);
 
-        // Инициализация карты, если ещё не создана
-        if (!mapRef.current) {
-          mapRef.current = new window.ymaps.Map(containerRef.current, {
-            center: [55.7558, 37.6173], // Москва
-            zoom: 10,
-            type: mapType,
-            controls: [],
-          });
-        } else {
-          mapRef.current.setType(mapType);
-        }
+    return (
+        <>
+            {/* Контейнер карты */}
+            <div ref={containerRef} className={styles.mapContainer} />
 
-        const map = mapRef.current;
-
-        // Удаляем предыдущий обработчик клика, если был
-        if ((map as any)._clickHandler) {
-          map.events.remove("click", (map as any)._clickHandler);
-          (map as any)._clickHandler = null;
-        }
-
-        // Добавляем обработчик клика для добавления маркеров
-        if (drawMarkerOn) {
-          const handleClick = (e: any) => {
-            const coords = e.get("coords");
-            const placemark = new window.ymaps.Placemark(coords, {}, {
-              iconLayout: "default#image",
-              iconImageHref:
-                markerIconUrl || "https://maps.google.com/mapfiles/ms/icons/red-dot.png",
-              iconImageSize: [32, 32],
-              draggable: true,
-            });
-
-            map.geoObjects.add(placemark);
-            markersRef.current.push(placemark);
-          };
-
-          map.events.add("click", handleClick);
-          (map as any)._clickHandler = handleClick;
-        }
-      } catch (err) {
-        console.error("Ошибка инициализации Яндекс.Карт:", err);
-      }
-    };
-
-    initializeMap();
-
-    return () => {
-      isUnmounted = true;
-      const map = mapRef.current;
-      if (!map) return;
-
-      // Удаляем все маркеры при размонтировании
-      markersRef.current.forEach((marker) => map.geoObjects.remove(marker));
-      markersRef.current = [];
-
-      if ((map as any)._clickHandler) {
-        map.events.remove("click", (map as any)._clickHandler);
-        (map as any)._clickHandler = null;
-      }
-    };
-  }, [providerId, drawMarkerOn, markerIconUrl]);
-
-  return <div ref={containerRef} className={styles.mapContainer} />;
+            {/* Рендер маркеров и линий только после готовности карты */}
+            {mapLoaded && mapRef.current && (
+                <YandexGeoRenderer
+                    map={mapRef.current}
+                    tempGeoData={tempGeoData}
+                    savedGeoData={savedGeoData}
+                    markerIconUrl={markerIconUrl}
+                    markersRef={markersRef}
+                />
+            )}
+        </>
+    );
 };
 
 export default YandexEngine;

@@ -1,90 +1,150 @@
-import React, { FC, ReactElement, useEffect, useState } from "react";
+import { FC, ReactElement, useState, useEffect, useMemo } from "react";
 import MapLibreEngine from "../../engines/MapLibreEngine";
 import GoogleEngine from "../../engines/GoogleEngine";
 import YandexEngine from "../../engines/YandexEngine";
 import ArcGISEngine from "../../engines/ArcGISEngine";
-
 import styles from "./MapEngineWrapper.module.scss";
+import { DrawActionType } from "../../engines/drawActionType";
+import { GeoData } from "../../engines/geoDataType";
+import { getProviderConfig } from "../../utils/providers";
 
+/**
+ * Пропсы компонента MapEngineWrapper
+ */
 interface MapEngineWrapperProps {
-  /** Идентификатор провайдера карты */
-  providerId: string;
-  /** Включает возможность добавления маркеров по клику */
-  drawMarkerOn?: boolean;
-  /** URL кастомной иконки маркера */
-  markerIconUrl?: string;
+    /** Идентификатор провайдера карт */
+    providerId: string;
+
+    /** Текущий режим рисования (необязательный) */
+    drawActionType?: DrawActionType;
+
+    /** URL иконки маркера (необязательный) */
+    markerIconUrl?: string;
+
+    /** Временные геоданные для рисования */
+    tempGeoData: GeoData;
+
+    /** Сохранённые геоданные */
+    savedGeoData: GeoData;
+
+    /** Колбэк при обновлении геоданных */
+    onUpdateGeoData: (data: GeoData) => void;
 }
 
 /**
- * MapEngineWrapper выбирает нужный движок карты в зависимости от providerId
- * и управляет его уникальным ключом, чтобы корректно обновлять компонент при смене провайдера.
+ * MapEngineWrapper — компонент-обёртка, выбирающий движок карты
+ * в зависимости от выбранного провайдера.
+ * Поддерживаются MapLibre, ArcGIS, Google и Yandex.
  */
 const MapEngineWrapper: FC<MapEngineWrapperProps> = ({
-  providerId,
-  drawMarkerOn = false,
-  markerIconUrl,
+    providerId,
+    drawActionType,
+    markerIconUrl,
+    tempGeoData,
+    savedGeoData,
+    onUpdateGeoData,
 }): ReactElement => {
-  // Ключ для принудительного пересоздания движка при смене провайдера
-  const [instanceKey, setInstanceKey] = useState<number>(0);
+    /**
+     * Состояние ключа инстанса карты.
+     * Используется для принудительной перерисовки движка при смене провайдера.
+     */
+    const [instanceKey, setInstanceKey] = useState<number>(0);
 
-  useEffect(() => {
-    setInstanceKey((prevKey) => prevKey + 1);
-  }, [providerId]);
+    /**
+     * Эффект: инкремент ключа при смене провайдера,
+     * чтобы React заново инициализировал компонент движка карты.
+     */
+    useEffect(() => {
+        setInstanceKey(prevKey => prevKey + 1);
+    }, [providerId]);
 
-  /**
-   * Выбирает и возвращает нужный компонент движка карты
-   */
-  const renderMapEngine = (): ReactElement | null => {
-    const key = `${providerId}-${instanceKey}`;
+    /**
+     * Уникальный ключ инстанса карты.
+     * Формируется из идентификатора провайдера и счетчика инстанса.
+     */
+    const engineKey: string = useMemo(() => `${providerId}-${instanceKey}`, [providerId, instanceKey]);
 
-    if (providerId.startsWith("MapLibre") && !providerId.startsWith("MapLibre_ArcGIS")) {
-      return (
-        <MapLibreEngine
-          key={key}
-          providerId={providerId}
-          drawMarkerOn={drawMarkerOn}
-          markerIconUrl={markerIconUrl}
-        />
-      );
-    }
+    /**
+     * Получает конфигурацию карты для текущего провайдера с кэшированием.
+     */
+    const mapConfig = useMemo(() => getProviderConfig(providerId), [providerId]);
 
-    if (providerId.startsWith("MapLibre_ArcGIS")) {
-      return (
-        <ArcGISEngine
-          key={key}
-          providerId={providerId}
-          drawMarkerOn={drawMarkerOn}
-          markerIconUrl={markerIconUrl}
-        />
-      );
-    }
+    /**
+     * Функция выбора и рендеринга нужного движка карты в зависимости от провайдера.
+     *
+     * @returns ReactElement движка карты или null, если провайдер не поддерживается
+     */
+    const renderEngine = (): ReactElement | null => {
+        // Проверка на MapLibre без ArcGIS
+        if (providerId.startsWith("MapLibre") && !providerId.startsWith("MapLibre_ArcGIS")) {
+            return (
+                <MapLibreEngine
+                    key={engineKey}
+                    providerId={providerId}
+                    drawActionType={drawActionType}
+                    markerIconUrl={markerIconUrl}
+                    mapConfig={mapConfig}
+                    tempGeoData={tempGeoData}
+                    savedGeoData={savedGeoData}
+                    onUpdateGeoData={onUpdateGeoData}
+                />
+            );
+        }
 
-    if (providerId === "Google" || providerId === "GoogleSatellite") {
-      return (
-        <GoogleEngine
-          key={key}
-          providerId={providerId}
-          drawMarkerOn={drawMarkerOn}
-          markerIconUrl={markerIconUrl}
-        />
-      );
-    }
+        // Проверка на MapLibre с ArcGIS
+        if (providerId.startsWith("MapLibre_ArcGIS")) {
+            return (
+                <ArcGISEngine
+                    key={engineKey}
+                    providerId={providerId}
+                    drawActionType={drawActionType}
+                    markerIconUrl={markerIconUrl}
+                    mapConfig={mapConfig}
+                    tempGeoData={tempGeoData}
+                    savedGeoData={savedGeoData}
+                    onUpdateGeoData={onUpdateGeoData}
+                />
+            );
+        }
 
-    if (providerId.startsWith("Yandex")) {
-      return (
-        <YandexEngine
-          key={key}
-          providerId={providerId}
-          drawMarkerOn={drawMarkerOn}
-          markerIconUrl={markerIconUrl}
-        />
-      );
-    }
+        // Проверка на Google Maps
+        if (providerId.startsWith("Google")) {
+            return (
+                <GoogleEngine
+                    key={engineKey}
+                    providerId={providerId}
+                    drawActionType={drawActionType}
+                    markerIconUrl={markerIconUrl}
+                    mapConfig={mapConfig}
+                    tempGeoData={tempGeoData}
+                    savedGeoData={savedGeoData}
+                    onUpdateGeoData={onUpdateGeoData}
+                />
+            );
+        }
 
-    return null;
-  };
+        // Проверка на Yandex Maps
+        if (providerId.startsWith("Yandex")) {
+            return (
+                <YandexEngine
+                    key={engineKey}
+                    providerId={providerId}
+                    drawActionType={drawActionType}
+                    markerIconUrl={markerIconUrl}
+                    mapConfig={mapConfig}
+                    tempGeoData={tempGeoData}
+                    savedGeoData={savedGeoData}
+                    onUpdateGeoData={onUpdateGeoData}
+                />
+            );
+        }
 
-  return <div className={styles.wrapper}>{renderMapEngine()}</div>;
+        // Если провайдер не поддерживается — возвращаем null
+        return null;
+    };
+
+    // Основной рендер: контейнер обёртки с динамическим движком
+    return <div className={styles.wrapper}>{renderEngine()}</div>;
 };
 
 export default MapEngineWrapper;

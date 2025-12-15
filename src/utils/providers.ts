@@ -1,57 +1,112 @@
-// Список доступных провайдеров карт
-export const PROVIDERS: { id: string; title: string }[] = [
-  { id: "MapLibre_OSM", title: "OpenStreetMap (MapLibre)" },
-  { id: "MapLibre_Mapbox", title: "Mapbox (via MapLibre)" },
-  { id: "MapLibre_ArcGISAero", title: "ArcGIS Aero (MapLibre)" },
-  { id: "MapLibre_ArcGIS", title: "ArcGIS Streets (MapLibre)" },
-  { id: "MapLibre_OpenTransport", title: "OpenTransport (Thunderforest) (MapLibre)" },
-  { id: "Google", title: "Карта Google (SDK)" },
-  { id: "GoogleSatellite", title: "Спутник Google (SDK)" },
-  { id: "Yandex", title: "Карта Яндекс (SDK)" },
-  { id: "YandexSatellite", title: "Спутник Яндекс (SDK)" },
-  { id: "YandexHybrid", title: "Яндекс: гибрид" },
-];
+import { MapConfig } from "../engines/mapConfig";
+import { PROVIDERS, MapProvider } from "./providerList";
 
 /**
- * Возвращает массив URL шаблонов тайлов для выбранного провайдера.
- * @param providerId - идентификатор провайдера карт
+ * Кеш конфигураций, тайлов и src провайдеров карт.
+ * 
+ * Ключ: уникальный идентификатор провайдера карты.
+ * Значение: объект с конфигурацией карты, массивом URL тайлов и src (для SDK).
+ * 
+ * Используется для:
+ * - Ускорения повторных вызовов функций `getProviderConfig`, `tileTemplate`, `getProviderSrc`
+ * - Избежания повторного клонирования данных
+ */
+const providerConfigCache = new Map<string, { config: MapConfig; tiles: string[]; src?: string }>();
+
+/**
+ * Приватная функция для сохранения провайдера в кэш.
+ * 
+ * @param provider - объект провайдера карты
+ */
+const cacheProvider = (provider: MapProvider): void => {
+    providerConfigCache.set(provider.id, {
+        config: provider.config,
+        tiles: provider.tiles ?? [],
+        src: provider.src,
+    });
+};
+
+/**
+ * Возвращает массив URL шаблонов тайлов для выбранного провайдера MapLibre.
+ * 
+ * Использует кеш для ускорения повторных вызовов.
+ * Для провайдеров без тайлов возвращает пустой массив.
+ *
+ * @param providerId - уникальный идентификатор провайдера
+ * @returns Массив строк с URL шаблонами тайлов или пустой массив
  */
 export const tileTemplate = (providerId: string): string[] => {
-  // Получаем переменные окружения с токенами для Mapbox и Thunderforest
-  const env = import.meta.env as Record<string, string | undefined>;
-  const mapboxToken = env.VITE_MAPBOX_TOKEN ?? "";
-  const thunderKey = env.VITE_OPENTRANSPORT_KEY ?? "";
+    // Проверка кеша: если данные уже есть, возвращаем их копию
+    if (providerConfigCache.has(providerId)) {
+        return structuredClone(providerConfigCache.get(providerId)!.tiles);
+    }
 
-  switch (providerId) {
-    case "MapLibre_OSM":
-      return [
-        "https://a.tile.openstreetmap.org/{z}/{x}/{y}.png",
-        "https://b.tile.openstreetmap.org/{z}/{x}/{y}.png",
-        "https://c.tile.openstreetmap.org/{z}/{x}/{y}.png",
-      ];
+    // Поиск провайдера в списке PROVIDERS
+    const provider = PROVIDERS.find((p) => p.id === providerId);
+    if (!provider) {
+        console.warn(`Provider not found: ${providerId}`);
+        return [];
+    }
 
-    case "MapLibre_Mapbox":
-      return [
-        `https://api.mapbox.com/styles/v1/mapbox/streets-v11/tiles/256/{z}/{x}/{y}?access_token=${mapboxToken}`,
-      ];
+    // Сохраняем провайдера в кэш
+    cacheProvider(provider);
 
-    case "MapLibre_ArcGISAero":
-      return [
-        "https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}",
-      ];
+    // Возвращаем копию массива тайлов, чтобы избежать мутаций внешним кодом
+    return structuredClone(provider.tiles ?? []);
+};
 
-    case "MapLibre_ArcGIS":
-      return [
-        "https://server.arcgisonline.com/ArcGIS/rest/services/World_Street_Map/MapServer/tile/{z}/{y}/{x}",
-      ];
+/**
+ * Возвращает конфигурацию карты для выбранного провайдера.
+ * 
+ * Использует кеш для ускорения повторных вызовов и предотвращает мутацию исходных данных.
+ *
+ * @param providerId - уникальный идентификатор провайдера
+ * @throws Ошибка, если конфигурация для провайдера не найдена
+ * @returns MapConfig — структурная копия конфигурации провайдера
+ */
+export const getProviderConfig = (providerId: string): MapConfig => {
+    // Проверка кеша: если данные уже есть, возвращаем их копию
+    if (providerConfigCache.has(providerId)) {
+        return structuredClone(providerConfigCache.get(providerId)!.config);
+    }
 
-    case "MapLibre_OpenTransport":
-      return [
-        `https://tile.thunderforest.com/transport/{z}/{x}/{y}.png?apikey=${thunderKey}`,
-      ];
+    // Поиск провайдера в списке PROVIDERS
+    const provider = PROVIDERS.find((p) => p.id === providerId);
+    if (!provider) {
+        throw new Error(`Provider config not found: ${providerId}`);
+    }
 
-    default:
-      // Для всех остальных провайдеров пока нет шаблонов тайлов
-      return [];
-  }
+    // Сохраняем провайдера в кэш
+    cacheProvider(provider);
+
+    // Возвращаем структурную копию конфигурации
+    return structuredClone(provider.config);
+};
+
+/**
+ * Возвращает URL скрипта API или SDK для выбранного провайдера (например, Yandex или Google Maps).
+ * 
+ * Использует кеш для ускорения повторных вызовов.
+ *
+ * @param providerId - уникальный идентификатор провайдера
+ * @returns URL скрипта API или undefined, если src не определён
+ */
+export const getProviderSrc = (providerId: string): string | undefined => {
+    // Проверка кеша: если данные уже есть, возвращаем src
+    if (providerConfigCache.has(providerId)) {
+        return providerConfigCache.get(providerId)!.src;
+    }
+
+    // Поиск провайдера в списке PROVIDERS
+    const provider = PROVIDERS.find((p) => p.id === providerId);
+    if (!provider) {
+        console.warn(`Provider not found: ${providerId}`);
+        return undefined;
+    }
+
+    // Сохраняем провайдера в кэш
+    cacheProvider(provider);
+
+    // Возвращаем src
+    return provider.src;
 };

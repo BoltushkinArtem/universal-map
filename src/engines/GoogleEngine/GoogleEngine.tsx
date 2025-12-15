@@ -1,130 +1,139 @@
-import React, { FC, useEffect, useRef } from "react";
+import React, { FC, useRef } from "react";
 import styles from "./GoogleEngine.module.scss";
-
-// Расширяем глобальный объект Window для корректной типизации google.maps
-declare global {
-  interface Window {
-    google: typeof google;
-  }
-}
-
-interface GoogleEngineProps {
-  /** Идентификатор провайдера карты */
-  providerId: string;
-  /** Включает возможность добавления маркеров на карту */
-  drawMarkerOn?: boolean;
-  /** URL иконки маркера */
-  markerIconUrl?: string;
-}
+import { DrawActionType } from "../drawActionType";
+import { GeoData } from "../geoDataType";
+import { GoogleGeoRenderer } from "./GoogleGeoRenderer";
+import { useGoogleMapInit } from "./hooks/useGoogleMapInit";
+import { useGoogleDrawHandler } from "./hooks/useGoogleDrawHandler";
+import { useGoogleMapCursor } from "./hooks/useGoogleMapCursor";
+import { MapConfig } from "../mapConfig";
 
 /**
- * Динамическая загрузка Google Maps API
+ * Пропсы компонента GoogleEngine
  */
-async function loadGoogleMaps(apiKey: string): Promise<typeof google> {
-  if (window.google?.maps) return window.google;
+interface GoogleEngineProps {
+    /** Идентификатор провайдера карты (например, "GoogleSatellite" или "GoogleRoadmap") */
+    providerId: string;
 
-  return new Promise<typeof google>((resolve, reject) => {
-    const existingScript = document.querySelector<HTMLScriptElement>(
-      `script[src*="maps.googleapis.com/maps/api/js"]`
-    );
+    /** Текущий режим рисования (Point | LineString) */
+    drawActionType?: DrawActionType;
 
-    if (existingScript) {
-      existingScript.addEventListener("load", () => resolve(window.google));
-      existingScript.addEventListener("error", () =>
-        reject(new Error("Google Maps failed to load"))
-      );
-      return;
-    }
+    /** URL иконки маркера (необязательный) */
+    markerIconUrl?: string;
 
-    const script = document.createElement("script");
-    script.src = `https://maps.googleapis.com/maps/api/js?key=${apiKey}&v=weekly&libraries=places`;
-    script.async = true;
-    script.defer = true;
-    script.onload = () => resolve(window.google);
-    script.onerror = () => reject(new Error("Failed to load Google Maps"));
-    document.head.appendChild(script);
-  });
+    /** Конфигурация карты (центр и zoom) */
+    mapConfig: MapConfig;
+
+    /** Временные геоданные для рендеринга */
+    tempGeoData: GeoData;
+
+    /** Сохранённые геоданные для рендеринга */
+    savedGeoData: GeoData;
+
+    /** Колбэк для обновления геоданных после действий пользователя */
+    onUpdateGeoData: (data: GeoData) => void;
 }
 
 /**
- * GoogleEngine отображает карту Google с возможностью добавления маркеров.
+ * GoogleEngine — компонент-обёртка для Google Maps.
+ *
+ * Основные функции:
+ * 1. Подготавливает DOM-контейнер карты.
+ * 2. Инициализирует карту через useGoogleMapInit (загрузка API и создание map).
+ * 3. Подписывается на клики для режима рисования через useGoogleDrawHandler.
+ * 4. Управляет курсором контейнера в зависимости от режима рисования.
+ * 5. Делегирует рендер геоданных (точки/линии) в GoogleGeoRenderer.
+ *
+ * ВАЖНО: логика рендеринга и обработки кликов вынесена в хуки/рендерер — в этом компоненте
+ * только координация и управление DOM-контейнером.
  */
 const GoogleEngine: FC<GoogleEngineProps> = ({
-  providerId,
-  drawMarkerOn = false,
-  markerIconUrl,
+    providerId,
+    drawActionType,
+    markerIconUrl,
+    mapConfig,
+    tempGeoData,
+    savedGeoData,
+    onUpdateGeoData,
 }) => {
-  // Ссылка на контейнер DOM для карты
-  const containerRef = useRef<HTMLDivElement | null>(null);
-
-  // Ссылка на экземпляр карты Google
-  const mapRef = useRef<google.maps.Map | null>(null);
-
-  // Список маркеров для управления ими
-  const markersRef = useRef<google.maps.Marker[]>([]);
-
-  useEffect(() => {
-    const apiKey = (import.meta.env as any).VITE_GOOGLE_API_KEY;
-    if (!apiKey || !containerRef.current) return;
-
-    let cancelled = false;
-    let clickListener: google.maps.MapsEventListener | null = null;
+    /**
+     * Ref на DOM-элемент контейнера карты.
+     * Non-null assertion используется, так как контейнер гарантированно будет присутствовать в DOM
+     * до инициализации карты.
+     */
+    const containerRef = useRef<HTMLDivElement>(null!);
 
     /**
-     * Инициализация карты Google
+     * Коллекции объектов карты (refs) для стабильного доступа между рендерами:
+     * - pointMarkersRef: маркеры точек (id -> Marker)
+     * - polylinesRef: полилинии (id -> Polyline)
+     * - polylineVertexMarkersRef: маркеры вершин полилиний (id -> Marker[])
      */
-    const initializeMap = async () => {
-      try {
-        const google = await loadGoogleMaps(apiKey);
-        if (cancelled || !containerRef.current) return;
+    const pointMarkersRef = useRef<Map<string, google.maps.Marker>>(new Map());
+    const polylinesRef = useRef<Map<string, google.maps.Polyline>>(new Map());
+    const polylineVertexMarkersRef = useRef<Map<string, google.maps.Marker[]>>(new Map());
 
-        const map = new google.maps.Map(containerRef.current, {
-          center: { lat: 55.7558, lng: 37.6173 }, // Москва
-          zoom: 10,
-          mapTypeId: providerId === "GoogleSatellite" ? "satellite" : "roadmap",
-          disableDefaultUI: true,
-        });
-        mapRef.current = map;
+    /**
+     * Инициализация карты через кастомный хук useGoogleMapInit.
+     * Хук отвечает за:
+     * - загрузку Google Maps API
+     * - создание google.maps.Map
+     * - генерацию containerIdRef и styleTagRef (для локального CSS)
+     * - очистку карты при размонтировании
+     *
+     * Возвращает:
+     * - mapRef: Ref на google.maps.Map
+     * - mapReady: boolean — карта инициализирована и готова
+     * - containerIdRef: Ref со строковым id контейнера
+     * - styleTagRef: Ref на динамический <style>
+     */
+    const { mapRef, mapReady, containerIdRef, styleTagRef } = useGoogleMapInit({
+        providerId,
+        containerRef,
+        mapConfig,
+        pointMarkersRef,
+        polylinesRef,
+        polylineVertexMarkersRef,
+    });
 
-        // Добавление маркеров по клику
-        if (drawMarkerOn) {
-          clickListener = map.addListener("click", (event: google.maps.MapMouseEvent) => {
-            if (!event.latLng) return;
+    /**
+     * Обработчик кликов карты для режима рисования.
+     * Хук useGoogleDrawHandler подписывается на события на mapRef и вызывает onUpdateGeoData.
+     */
+    useGoogleDrawHandler({
+        mapRef,
+        drawActionType,
+        tempGeoData,
+        onUpdateGeoData,
+    });
 
-            const marker = new google.maps.Marker({
-              position: event.latLng,
-              map,
-              icon: markerIconUrl
-                ? { url: markerIconUrl, scaledSize: new google.maps.Size(32, 32) }
-                : undefined,
-            });
+    /**
+     * Управление курсором контейнера карты:
+     * - drawActionType задан — курсор "crosshair"
+     * - drawActionType отсутствует — курсор "grab"
+     * Использует containerIdRef и styleTagRef для локального CSS.
+     */
+    useGoogleMapCursor(containerIdRef, styleTagRef, drawActionType);
 
-            markersRef.current.push(marker);
-          });
-        }
-      } catch (error) {
-        console.error("Google Maps initialization failed:", error);
-      }
-    };
+    return (
+        <>
+            {/* Контейнер, в который хук помещает google.maps.Map */}
+            <div ref={containerRef} className={styles.googleContainer} />
 
-    initializeMap();
-
-    // Очистка карты и маркеров при размонтировании
-    return () => {
-      cancelled = true;
-
-      markersRef.current.forEach((marker) => marker.setMap(null));
-      markersRef.current = [];
-
-      if (clickListener) {
-        google.maps.event.removeListener(clickListener);
-      }
-
-      mapRef.current = null;
-    };
-  }, [providerId, drawMarkerOn, markerIconUrl]);
-
-  return <div ref={containerRef} className={styles.googleContainer} />;
+            {/* После готовности карты рендерим GoogleGeoRenderer (синхронизация маркеров/полилиний) */}
+            {mapReady && mapRef.current && (
+                <GoogleGeoRenderer
+                    map={mapRef.current}
+                    tempGeoData={tempGeoData}
+                    savedGeoData={savedGeoData}
+                    markerIconUrl={markerIconUrl}
+                    pointMarkersRef={pointMarkersRef}
+                    polylinesRef={polylinesRef}
+                    polylineVertexMarkersRef={polylineVertexMarkersRef}
+                />
+            )}
+        </>
+    );
 };
 
 export default GoogleEngine;

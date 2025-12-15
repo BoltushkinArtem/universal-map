@@ -1,53 +1,128 @@
-import React, { FC } from "react";
+import { FC } from "react";
 import styles from "./GeoEditorPanel.module.scss";
+import { DrawActionType } from "../../engines/drawActionType";
+import { GeoData } from "../../engines/geoDataType";
 
-/** Пропсы компонента GeoEditorPanel */
+/**
+ * Пропсы для компонента GeoEditorPanel
+ */
 interface GeoEditorPanelProps {
-  /** Колбэк, вызываемый при выборе действия рисования */
-  onDrawAction: (type: string) => void;
+  /** Текущий выбранный режим рисования */
+  drawActionType?: DrawActionType;
+
+  /** Вызывается при смене режима рисования */
+  onDrawAction: (type?: DrawActionType) => void;
+
+  /** Вызывается при обновлении временных геоданных */
+  onUpdateGeoData: (data: GeoData) => void;
+
+  /** Завершает текущее редактирование */
+  onFinishEditing: () => void;
+
+  /** Отменяет текущее редактирование */
+  onCancelEditing: () => void;
+
+  /** Удаляет последнюю точку активной линии */
+  onDeleteLastPoint: () => void;
 }
 
-/** Интерфейс описания одной кнопки действия рисования */
+/** Описание действия рисования для кнопки */
 interface DrawAction {
-  /** Текст на кнопке */
   label: string;
-  /** Тип действия, передаваемый в колбэк */
-  type: string;
-  /** Флаг активности кнопки */
+  type: DrawActionType | undefined;
   enabled: boolean;
 }
 
 /**
- * GeoEditorPanel — панель инструментов для рисования геометрических фигур на карте.
- * Все кнопки, кроме "marker", отображаются как disabled.
+ * Панель управления редактированием геоданных на карте.
+ * Отображает кнопки для выбора режима рисования и управления текущей сессией редактирования.
  */
-const GeoEditorPanel: FC<GeoEditorPanelProps> = ({ onDrawAction }) => {
-  /** Список доступных действий с указанием, какие кнопки активны */
+const GeoEditorPanel: FC<GeoEditorPanelProps> = ({
+  drawActionType,
+  onDrawAction,
+  onUpdateGeoData,
+  onFinishEditing,
+  onCancelEditing,
+  onDeleteLastPoint,
+}) => {
+  /** Доступные действия рисования */
   const drawActions: DrawAction[] = [
-    { label: "Draw a polyline", type: "polyline", enabled: false },
-    { label: "Draw a polygon", type: "polygon", enabled: false },
-    { label: "Draw a rectangle", type: "rectangle", enabled: false },
-    { label: "Draw a marker", type: "marker", enabled: true },
-    { label: "Draw a multi polyline", type: "multiPolyline", enabled: false },
-    { label: "Draw a multi polygon", type: "multiPolygon", enabled: false },
+    { label: "Draw a polyline", type: DrawActionType.POLYLINE, enabled: true },
+    { label: "Draw a marker", type: DrawActionType.MARKER, enabled: true },
+    { label: "Draw a polygon", type: undefined, enabled: false },
+    { label: "Draw a rectangle", type: undefined, enabled: false },
+    { label: "Draw a multi polyline", type: undefined, enabled: false },
+    { label: "Draw a multi polygon", type: undefined, enabled: false },
   ];
+
+  /**
+   * Обработка нажатия на кнопку выбора режима рисования.
+   * - Устанавливает новый режим
+   * - Очищает временные геоданные
+   *
+   * @param type - Новый режим рисования
+   */
+  const handleActionClick = (type?: DrawActionType) => {
+    onDrawAction(type);
+
+    onUpdateGeoData({
+      type: "FeatureCollection",
+      features: [],
+    });
+  };
+
+  /**
+   * Рендер кнопок управления текущей сессией редактирования
+   * - Cancel, Delete last point, Finish в зависимости от режима
+   */
+  const renderActiveActionButtons = () => {
+    if (drawActionType === DrawActionType.POLYLINE) {
+      return (
+        <div className={styles.menuButtons}>
+          <button className={styles.menuButton} onClick={onCancelEditing}>
+            Cancel
+          </button>
+          <button className={styles.menuButton} onClick={onDeleteLastPoint}>
+            Delete last point
+          </button>
+          <button className={styles.menuButton} onClick={onFinishEditing}>
+            Finish
+          </button>
+        </div>
+      );
+    }
+
+    if (drawActionType === DrawActionType.MARKER) {
+      return (
+        <div className={styles.menuButtons}>
+          <button className={styles.menuButton} onClick={onCancelEditing}>
+            Cancel
+          </button>
+        </div>
+      );
+    }
+
+    return null;
+  };
 
   return (
     <div className={styles.container}>
-      {/* Заголовок панели */}
       <h4 className={styles.title}>Geo Editor</h4>
 
-      {/* Генерация кнопок действий */}
-      {drawActions.map((action) => (
-        <button
-          key={action.type} // уникальный ключ для React
-          className={`${styles.button} ${!action.enabled ? styles.disabled : ""}`} // стиль disabled для неактивных кнопок
-          onClick={() => action.enabled && onDrawAction(action.type)} // вызов колбэка только если кнопка активна
-          disabled={!action.enabled} // стандартный HTML-атрибут disabled
-        >
-          {action.label}
-        </button>
-      ))}
+      <div className={styles.actionButtons}>
+        {drawActions.map(({ label, type, enabled }) => (
+          <button
+            key={label}
+            className={`${styles.button} ${!enabled ? styles.disabled : ""}`}
+            disabled={!enabled}
+            onClick={() => enabled && handleActionClick(type)}
+          >
+            {label}
+          </button>
+        ))}
+      </div>
+
+      {renderActiveActionButtons()}
     </div>
   );
 };

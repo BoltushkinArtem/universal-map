@@ -1,138 +1,117 @@
-import React, { FC, useEffect, useRef } from "react";
+import React, { FC, useRef } from "react";
 import styles from "./ArcGISEngine.module.scss";
+import { DrawActionType } from "../drawActionType";
+import { GeoData } from "../geoDataType";
+import { ArcGISGeoRenderer } from "./ArcGISGeoRenderer";
+import { useArcGISMapInit } from "./hooks/useArcGISMapInit";
+import { useArcGISDrawHandler } from "./hooks/useArcGISDrawHandler";
+import { useArcGISMapCursor } from "./hooks/useArcGISMapCursor";
+import { MapConfig } from "../mapConfig";
 
+/**
+ * Пропсы компонента ArcGISEngine
+ */
 interface ArcGISEngineProps {
-  /** Идентификатор провайдера, определяющий тип базовой карты */
-  providerId: string;
-  /** Включает возможность рисования маркеров на карте */
-  drawMarkerOn?: boolean;
-  /** URL кастомной иконки для маркера */
-  markerIconUrl?: string;
+    /** Идентификатор провайдера карты ArcGIS */
+    providerId: string;
+
+    /** Текущий режим рисования: Point или LineString */
+    drawActionType?: DrawActionType;
+
+    /** URL иконки маркера (необязательный) */
+    markerIconUrl?: string;
+
+    /** Конфигурация карты (центр и zoom) */
+    mapConfig: MapConfig;
+
+    /** Временные геоданные для отрисовки */
+    tempGeoData: GeoData;
+
+    /** Сохранённые геоданные (необязательные) */
+    savedGeoData?: GeoData;
+
+    /** Колбэк для обновления геоданных */
+    onUpdateGeoData: (data: GeoData) => void;
 }
 
 /**
- * ArcGISEngine — компонент для отображения карты ArcGIS с поддержкой установки маркеров.
+ * ArcGISEngine — компонент-обёртка для карты ArcGIS.
+ *
+ * Основные функции:
+ * 1. Инициализация карты ArcGIS и слоя графики через useArcGISMapInit.
+ * 2. Управление стилем курсора контейнера карты через useArcGISMapCursor.
+ * 3. Подписка на клики для добавления точек или линий через useArcGISDrawHandler.
+ * 4. Делегирование рендера графики (точки, линии) в ArcGISGeoRenderer.
+ *
+ * Компонент отвечает только за координацию и управление DOM-контейнером.
+ * Логика рендеринга и обработки кликов вынесена в хуки и ArcGISGeoRenderer.
  */
 const ArcGISEngine: FC<ArcGISEngineProps> = ({
-  providerId,
-  drawMarkerOn = false,
-  markerIconUrl,
+    providerId,
+    drawActionType,
+    markerIconUrl,
+    mapConfig,
+    tempGeoData,
+    savedGeoData,
+    onUpdateGeoData,
 }) => {
-  // Контейнер DOM для карты
-  const containerRef = useRef<HTMLDivElement | null>(null);
+    /**
+     * Ref на DOM-элемент контейнера карты.
+     * Non-null assertion используется, так как контейнер гарантированно будет смонтирован до инициализации карты.
+     */
+    const containerRef = useRef<HTMLDivElement>(null!);
 
-  // Ссылки на MapView и обработчик клика
-  const viewRef = useRef<__esri.MapView | null>(null);
-  const clickHandlerRef = useRef<__esri.WatchHandle | null>(null);
+    /**
+     * Инициализация карты и слоя графики.
+     * Хук useArcGISMapInit возвращает:
+     * - viewRef: Ref на экземпляр ArcGIS MapView
+     * - graphicsLayerRef: Ref на слой графики для точек и линий
+     * - esriModulesRef: Ref на загруженные модули ArcGIS API
+     * - mapReady: флаг готовности карты к взаимодействию
+     */
+    const { viewRef, graphicsLayerRef, esriModulesRef, mapReady } = useArcGISMapInit({
+        providerId,
+        containerRef,
+        mapConfig,
+    });
 
-  useEffect(() => {
-    let cancelled = false;
+    /**
+     * Управление стилем курсора контейнера карты.
+     * - Курсор "crosshair" при активном режиме рисования.
+     * - Курсор "grab" в обычном режиме.
+     * Вынос в отдельный хук повышает читаемость и повторное использование.
+     */
+    useArcGISMapCursor(containerRef, drawActionType);
 
-    // Динамическая загрузка ArcGIS JS API и CSS
-    const loadArcGisApi = async (): Promise<void> => {
-      if ((window as any).require) return;
+    /**
+     * Подписка на клики карты для добавления точек или линий.
+     * useArcGISDrawHandler:
+     * - Обрабатывает клики пользователя по карте.
+     * - Обновляет tempGeoData через onUpdateGeoData.
+     */
+    useArcGISDrawHandler({
+        viewRef,
+        drawActionType,
+        tempGeoData,
+        onUpdateGeoData,
+    });
 
-      const cssLink = document.createElement("link");
-      cssLink.rel = "stylesheet";
-      cssLink.href = "https://js.arcgis.com/4.26/esri/themes/light/main.css";
-      document.head.appendChild(cssLink);
+    return (
+        <>
+            {/* Контейнер для карты ArcGIS */}
+            <div ref={containerRef} className={styles.arcgisContainer} />
 
-      await new Promise<void>((resolve, reject) => {
-        const script = document.createElement("script");
-        script.src = "https://js.arcgis.com/4.26/";
-        script.async = true;
-        script.onload = () => resolve();
-        script.onerror = () => reject(new Error("ArcGIS API failed to load"));
-        document.head.appendChild(script);
-      });
-    };
-
-    // Инициализация карты ArcGIS
-    const initMap = async (): Promise<void> => {
-      await loadArcGisApi();
-      if (cancelled || !containerRef.current) return;
-
-      (window as any).require(
-        [
-          "esri/Map",
-          "esri/views/MapView",
-          "esri/Graphic",
-          "esri/layers/GraphicsLayer",
-          "esri/geometry/Point",
-          "esri/symbols/PictureMarkerSymbol",
-        ],
-        (
-          Map: typeof __esri.Map,
-          MapView: typeof __esri.MapView,
-          Graphic: typeof __esri.Graphic,
-          GraphicsLayer: typeof __esri.GraphicsLayer,
-          Point: typeof __esri.Point,
-          PictureMarkerSymbol: typeof __esri.PictureMarkerSymbol
-        ) => {
-          if (cancelled) return;
-
-          // Создание карты с базовой подложкой
-          const map = new Map({
-            basemap:
-              providerId === "MapLibre_ArcGISAero" ? "satellite" : "streets-vector",
-          });
-
-          // Создание MapView и привязка к контейнеру
-          const view = new MapView({
-            container: containerRef.current!,
-            map,
-            center: [37.6173, 55.7558],
-            zoom: 10,
-          });
-          viewRef.current = view;
-
-          // Добавление слоя графики
-          const graphicsLayer = new GraphicsLayer();
-          map.add(graphicsLayer);
-
-          // Обработчик клика для добавления маркеров
-          if (drawMarkerOn) {
-            clickHandlerRef.current = view.on(
-              "click",
-              (event: __esri.ViewClickEvent) => {
-                const point = new Point({
-                  longitude: event.mapPoint.longitude,
-                  latitude: event.mapPoint.latitude,
-                });
-
-                const symbol = new PictureMarkerSymbol({
-                  url:
-                    markerIconUrl ||
-                    "/custom-marker.png" ||
-                    "https://maps.google.com/mapfiles/ms/icons/red-dot.png",
-                  width: 32,
-                  height: 32,
-                });
-
-                const marker = new Graphic({ geometry: point, symbol });
-                graphicsLayer.add(marker);
-              }
-            );
-          }
-        }
-      );
-    };
-
-    initMap().catch(console.error);
-
-    // Очистка при размонтировании компонента
-    return () => {
-      cancelled = true;
-
-      clickHandlerRef.current?.remove();
-      clickHandlerRef.current = null;
-
-      viewRef.current?.destroy();
-      viewRef.current = null;
-    };
-  }, [providerId, drawMarkerOn, markerIconUrl]);
-
-  return <div ref={containerRef} className={styles.arcgisContainer} />;
+            {/* Рендер графики: точки и линии */}
+            <ArcGISGeoRenderer
+                mapReady={mapReady}
+                graphicsLayer={graphicsLayerRef.current}
+                esriModules={esriModulesRef.current}
+                tempGeoData={tempGeoData}
+                savedGeoData={savedGeoData}
+                markerIconUrl={markerIconUrl}
+            />
+        </>
+    );
 };
 
 export default ArcGISEngine;

@@ -1,20 +1,29 @@
 import React, { FC, ChangeEvent } from "react";
-import { PROVIDERS } from "../../utils/providers";
+import { PROVIDERS } from "../../utils/providerList";
 import styles from "./ProviderSelector.module.scss";
 
+/**
+ * Пропсы компонента ProviderSelector
+ */
 interface ProviderSelectorProps {
-  /** Выбранный идентификатор провайдера */
+  /** Выбранный идентификатор провайдера картографической подложки */
   value: string;
-  /** Колбэк при изменении выбранного провайдера */
+
+  /** Колбэк, вызываемый при изменении выбранного провайдера */
   onChange: (id: string) => void;
 }
 
 /**
  * ProviderSelector — выпадающий список для выбора провайдера картографической подложки.
+ *
+ * @param value - текущий выбранный провайдер
+ * @param onChange - функция, вызываемая при смене провайдера
  */
 const ProviderSelector: FC<ProviderSelectorProps> = ({ value, onChange }) => {
   /**
    * Обработчик изменения значения select
+   *
+   * @param event - событие изменения select
    */
   const handleSelectChange = (event: ChangeEvent<HTMLSelectElement>): void => {
     onChange(event.target.value);
@@ -22,13 +31,15 @@ const ProviderSelector: FC<ProviderSelectorProps> = ({ value, onChange }) => {
 
   return (
     <div className={styles.container}>
-      {/* Заголовок селектора */}
       <label className={styles.label}>
         Подложка
       </label>
 
-      {/* Селект для выбора провайдера */}
-      <select className={styles.select} value={value} onChange={handleSelectChange}>
+      <select
+        className={styles.select}
+        value={value}
+        onChange={handleSelectChange}
+      >
         {PROVIDERS.map((provider) => (
           <option key={provider.id} value={provider.id}>
             {provider.title}

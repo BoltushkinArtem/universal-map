@@ -1,164 +1,119 @@
-import React, { FC, useEffect, useRef, useState } from "react";
-import maplibregl from "maplibre-gl";
+import { FC, useRef } from "react";
 import "maplibre-gl/dist/maplibre-gl.css";
-import { tileTemplate } from "../../utils/providers";
 import styles from "./MapLibreEngine.module.scss";
-
-interface MapLibreEngineProps {
-  /** Идентификатор провайдера тайлов */
-  providerId: string;
-  /** Включает возможность добавления маркеров по клику */
-  drawMarkerOn: boolean;
-  /** URL кастомной иконки маркера */
-  markerIconUrl?: string;
-}
-
-interface MarkerData {
-  id: number;
-  lngLat: maplibregl.LngLatLike;
-}
-
-/** Проверка поддержки WebGL в браузере */
-const isWebGLAvailable = (): boolean => {
-  try {
-    const canvas = document.createElement("canvas");
-    return !!(
-      window.WebGLRenderingContext &&
-      (canvas.getContext("webgl") || canvas.getContext("experimental-webgl"))
-    );
-  } catch {
-    return false;
-  }
-};
+import { DrawActionType } from "../drawActionType";
+import { GeoData } from "../geoDataType";
+import { MapLibreGeoRenderer } from "./MapLibreGeoRenderer";
+import { useMapLibreMapInit } from "./hooks/useMapLibreMapInit";
+import { useMapLibreDrawHandler } from "./hooks/useMapLibreDrawHandler";
+import { useMapLibreMapCursor } from "./hooks/useMapLibreMapCursor";
+import { MapConfig } from "../mapConfig";
 
 /**
- * Компонент карты MapLibre с поддержкой добавления и удаления маркеров
+ * Пропсы компонента MapLibreEngine
+ */
+interface MapLibreEngineProps {
+    /** Идентификатор провайдера для подгрузки тайлов */
+    providerId: string;
+
+    /** Тип действия рисования (Point | LineString) */
+    drawActionType?: DrawActionType;
+
+    /** URL иконки маркера (по желанию) */
+    markerIconUrl?: string;
+
+    /** Конфигурация карты (центр и zoom) */
+    mapConfig: MapConfig;
+
+    /** Временные геоданные пользователя */
+    tempGeoData: GeoData;
+
+    /** Сохранённые геоданные (по желанию) */
+    savedGeoData?: GeoData;
+
+    /** Колбэк для обновления геоданных при добавлении маркеров или линий */
+    onUpdateGeoData: (data: GeoData) => void;
+}
+
+/**
+ * MapLibreEngine — компонент-обёртка для MapLibre.
+ *
+ * Ответственности:
+ * 1. Инициализация карты через useMapLibreMapInit.
+ * 2. Подписка на клики по карте и обновление tempGeoData через useMapLibreDrawHandler.
+ * 3. Управление курсором контейнера карты через useMapLibreMapCursor.
+ * 4. Рендер GeoData (маркеры и линии) через MapLibreGeoRenderer после готовности карты.
+ *
+ * ВАЖНО: логика рендеринга и кликов вынесена в хуки и MapLibreGeoRenderer.
  */
 const MapLibreEngine: FC<MapLibreEngineProps> = ({
-  providerId,
-  drawMarkerOn,
-  markerIconUrl,
+    providerId,
+    drawActionType,
+    markerIconUrl,
+    mapConfig,
+    tempGeoData,
+    savedGeoData,
+    onUpdateGeoData,
 }) => {
-  const mapContainerRef = useRef<HTMLDivElement | null>(null);
-  const mapRef = useRef<maplibregl.Map | null>(null);
-  const markersRef = useRef<maplibregl.Marker[]>([]);
-  const [markerData, setMarkerData] = useState<MarkerData[]>([]);
-  const markerIdRef = useRef(0);
+    /**
+     * Ref на DOM-элемент контейнера карты.
+     * Non-null assertion используется, т.к. элемент гарантированно будет смонтирован.
+     */
+    const mapContainerRef = useRef<HTMLDivElement>(null!);
 
-  /** Инициализация карты и базового слоя */
-  useEffect(() => {
-    const container = mapContainerRef.current;
-    if (!container) return;
+    /**
+     * Ref для хранения всех точечных маркеров по их ID.
+     * Позволяет обновлять позиции маркеров без пересоздания.
+     */
+    const markersRef = useRef<Map<string, maplibregl.Marker>>(new Map());
 
-    if (!isWebGLAvailable()) {
-      console.error(
-        "WebGL не поддерживается в этом браузере. MapLibre карта не будет отображена."
-      );
-      return;
-    }
-
-    const mapInstance = new maplibregl.Map({
-      container,
-      style: "https://demotiles.maplibre.org/style.json",
-      center: [37.6173, 55.7558],
-      zoom: 10,
+    /**
+     * Инициализация карты MapLibre через хук.
+     * Возвращает:
+     * - mapRef: Ref на экземпляр карты maplibregl.Map
+     * - mapReady: флаг готовности карты
+     */
+    const { mapRef, mapReady } = useMapLibreMapInit({
+        containerRef: mapContainerRef,
+        providerId,
+        mapConfig,
     });
 
-    mapRef.current = mapInstance;
-
-    mapInstance.on("load", () => {
-      const tiles = tileTemplate(providerId);
-
-      if (!tiles?.length) {
-        console.warn("tileTemplate вернул пустой массив для", providerId);
-        return;
-      }
-
-      if (!mapInstance.getSource("basemap")) {
-        mapInstance.addSource("basemap", {
-          type: "raster",
-          tiles,
-          tileSize: 256,
-        });
-
-        mapInstance.addLayer({
-          id: "basemap",
-          type: "raster",
-          source: "basemap",
-        });
-      }
+    /**
+     * Подписка на клики карты для добавления маркеров или линий.
+     * useMapLibreDrawHandler обновляет tempGeoData через onUpdateGeoData.
+     */
+    useMapLibreDrawHandler({
+        mapRef,
+        drawActionType,
+        tempGeoData,
+        onUpdateGeoData,
     });
 
-    // Функция очистки для useEffect — удаляем маркеры и карту при размонтировании
-    return () => {
-      markersRef.current.forEach((marker) => marker.remove());
-      markersRef.current = [];
-      mapRef.current?.remove();
-      mapRef.current = null;
-    };
-  }, [providerId]);
+    /**
+     * Управление стилем курсора карты:
+     * - "crosshair" при активном drawActionType
+     * - "default" если drawActionType отсутствует
+     */
+    useMapLibreMapCursor(mapRef, drawActionType, mapReady);
 
-  /** Обновление тайлов при смене провайдера */
-  useEffect(() => {
-    const map = mapRef.current;
-    if (!map || !map.isStyleLoaded()) return;
+    return (
+        <>
+            {/* Контейнер для MapLibre */}
+            <div ref={mapContainerRef} className={styles.mapInner} />
 
-    const source = map.getSource("basemap") as maplibregl.RasterTileSource | undefined;
-    if (!source) return;
-
-    (source as any).tiles = tileTemplate(providerId);
-    map.triggerRepaint();
-  }, [providerId]);
-
-  /** Обработка кликов для добавления маркеров */
-  useEffect(() => {
-    const map = mapRef.current;
-    if (!map) return;
-
-    const handleClick = (e: maplibregl.MapMouseEvent) => {
-      if (!drawMarkerOn) return;
-
-      const markerElement = document.createElement("div");
-      markerElement.style.width = "32px";
-      markerElement.style.height = "32px";
-      markerElement.style.backgroundImage = `url(${
-        markerIconUrl || "https://maps.google.com/mapfiles/ms/icons/red-dot.png"
-      })`;
-      markerElement.style.backgroundSize = "contain";
-      markerElement.style.backgroundRepeat = "no-repeat";
-
-      const marker = new maplibregl.Marker({ element: markerElement, draggable: true })
-        .setLngLat(e.lngLat)
-        .addTo(map);
-
-      markersRef.current.push(marker);
-
-      const nextId = ++markerIdRef.current;
-      setMarkerData((prev) => [...prev, { id: nextId, lngLat: e.lngLat }]);
-    };
-
-    map.on("click", handleClick);
-
-    return () => {
-      map.off("click", handleClick);
-    };
-  }, [drawMarkerOn, markerIconUrl]);
-
-  /** Удаление последнего маркера */
-  const removeLastMarker = (): void => {
-    const lastMarker = markersRef.current.pop();
-    lastMarker?.remove();
-    setMarkerData((prev) => prev.slice(0, -1));
-  };
-
-  return (
-    <div className={styles.mapContainer}>
-      <div ref={mapContainerRef} className={styles.mapInner} />
-      <button onClick={removeLastMarker} className={styles.removeMarkerButton}>
-        Remove Last Marker
-      </button>
-    </div>
-  );
+            {/* Рендер геоданных только после готовности карты */}
+            {mapReady && mapRef.current && (
+                <MapLibreGeoRenderer
+                    map={mapRef.current}
+                    tempGeoData={tempGeoData}
+                    savedGeoData={savedGeoData}
+                    markerIconUrl={markerIconUrl}
+                    markersRef={markersRef}
+                />
+            )}
+        </>
+    );
 };
 
 export default MapLibreEngine;
