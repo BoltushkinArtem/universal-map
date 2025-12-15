@@ -1,5 +1,5 @@
 import React, { FC, ChangeEvent } from "react";
-import { PROVIDERS } from "../../utils/providers";
+import { PROVIDERS } from "../../utils/providerList";
 import styles from "./ProviderSelector.module.scss";
 
 /**
